@@ -1,0 +1,63 @@
+{
+  "name": "dnd-battle-table",
+  "version": "1.0.0",
+  "description": "D&D 5e — тактический боевой стол для ПК: редактор карт, бестиарий, создание персонажей, инициатива и бой по правилам 5-й редакции (hot-seat на одном компьютере).",
+  "main": "electron/main.js",
+  "author": "DnD-PC",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test tests/*.test.js",
+    "dist:win": "electron-builder --win portable --x64",
+    "dist:win-dir": "electron-builder --win dir --x64",
+    "dist:linux": "electron-builder --linux AppImage --x64"
+  },
+  "devDependencies": {
+    "electron": "33.4.11",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "su.dnd.battletable",
+    "productName": "DnD Battle Table",
+    "copyright": "SRD 5.1 content (c) Wizards of the Coast, CC-BY-4.0",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "package.json",
+      "build/icon.png"
+    ],
+    "asar": true,
+    "compression": "maximum",
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "DnD-Battle-Table.exe"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "build/icon.png",
+      "category": "Game"
+    },
+    "electronLanguages": [
+      "ru",
+      "en-US"
+    ]
+  }
+}
