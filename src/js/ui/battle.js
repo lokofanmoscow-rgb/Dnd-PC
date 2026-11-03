@@ -28,6 +28,7 @@
         el('button', { onclick: () => leave() }, '← Меню'),
         el('h2', {}, '⚔️'), nameInp, phaseLbl,
         el('div', { class: 'spacer' }),
+        el('button', { title: 'Рисовать на карте прямо во время игры', onclick: () => togglePaint() }, '🖌 Карта'),
         el('button', { onclick: () => addDialog() }, '+ Участник'),
         el('button', { onclick: () => settingsDialog() }, '⚙ Настройки'),
         el('button', { onclick: () => { Store.saveBattle(B); UI.toast('Бой сохранён'); } }, '💾 Сохранить'));
@@ -38,7 +39,8 @@
       const tooltip = el('div', { class: 'board-tooltip hidden' });
       const modeBanner = el('div', { class: 'mode-banner hidden' });
       const aiBadge = el('div', { class: 'ai-thinking hidden' }, '🤖 ИИ делает ход…');
-      wrap.append(tooltip, modeBanner, aiBadge, el('div', { class: 'board-zoom' },
+      const paintPanel = el('div', { class: 'paint-panel hidden' });
+      wrap.append(tooltip, modeBanner, aiBadge, paintPanel, el('div', { class: 'board-zoom' },
         el('button', { class: 'small', onclick: () => board.zoomAt(board.vw / 2, board.vh / 2, 1.2) }, '＋'),
         el('button', { class: 'small', onclick: () => board.zoomAt(board.vw / 2, board.vh / 2, 1 / 1.2) }, '－'),
         el('button', { class: 'small', onclick: () => board.fit() }, '⤢')));
@@ -57,6 +59,10 @@
         onHover: (cell, e, sx, sy) => onBoardHover(cell, sx, sy),
         onLeave: () => tooltip.classList.add('hidden'),
         onDragStart: (cell) => {
+          if (ui.mode === 'paint') {
+            paintAt(cell);
+            return true;
+          }
           if (B.phase !== 'setup' || ui.busy) return false;
           const o = G.occupant(B, Math.floor(cell.x), Math.floor(cell.y));
           if (!o) return false;
@@ -65,6 +71,7 @@
           return true;
         },
         onDrag: (cell) => {
+          if (ui.mode === 'paint') return paintAt(cell);
           const o = E.get(ui.dragUid);
           if (!o) return;
           const x = Math.floor(cell.x - (o.cells - 1) / 2);
@@ -73,6 +80,7 @@
           board.ov.areaColor = G.canStand(B, o, x, y, { fly: !!o.speed.fly }) && G.canEndAt(B, o, x, y) ? '#7cfc7c' : '#ff5050';
         },
         onDragEnd: (cell) => {
+          if (ui.mode === 'paint') return refresh();
           const o = E.get(ui.dragUid);
           ui.dragUid = null;
           board.ov.area = null;
@@ -137,6 +145,7 @@
         renderRight();
         computeReach();
         updateOverlays();
+        renderPaintPanel();
       }
 
       function computeReach() {
@@ -242,6 +251,9 @@
             autoPlaceAll();
             refresh();
           }, { style: { width: '100%' } })));
+        box.appendChild(el('div', { class: 'row', style: { marginTop: '6px' } },
+          el('button', { class: 'small', onclick: () => togglePaint() }, '🖌 Рисовать на карте'),
+          el('button', { class: 'small', onclick: () => D.App.show('editor', { map: B.map, returnBattle: B }) }, '✏️ В редактор')));
         box.appendChild(el('div', { class: 'section-title' }, 'Участники (' + B.combatants.length + ')'));
         box.appendChild(el('div', { class: 'row wrap' },
           el('button', { class: 'small', onclick: () => pickHeroes() }, '🧙 + Герои'),
@@ -503,6 +515,40 @@
           'Голубые клетки — куда можно пойти. Клик по врагу — атака лучшим доступным оружием. Правый клик по жетону — меню ведущего. Esc — отмена.'));
       }
 
+      /* ---------- Рисование на карте во время игры ---------- */
+      function togglePaint() {
+        if (ui.mode === 'paint') return setMode('move');
+        setMode('paint', { paintTile: ui.paintTile || 'wall' });
+      }
+      function renderPaintPanel() {
+        if (ui.mode !== 'paint') {
+          paintPanel.classList.add('hidden');
+          return;
+        }
+        paintPanel.classList.remove('hidden');
+        U.clear(paintPanel);
+        paintPanel.appendChild(el('div', { class: 'row', style: { marginBottom: '6px' } }, el('b', { style: { color: 'var(--accent3)' } }, '🖌 Кисть ведущего'), el('div', { class: 'grow' }), el('button', { class: 'small', onclick: () => setMode('move') }, '✕')));
+        const grid = el('div', { class: 'palette', style: { gridTemplateColumns: 'repeat(5, 1fr)' } });
+        for (const id in D.TILES) {
+          const cv = el('canvas', { width: 44, height: 44 });
+          D.drawTile(cv.getContext('2d'), id, 0, 0, 44, 3, 3, null);
+          grid.appendChild(el('div', { class: 'swatch' + (ui.paintTile === id ? ' sel' : ''), title: D.TILES[id].name, onclick: () => { ui.paintTile = id; renderPaintPanel(); } }, cv));
+        }
+        paintPanel.appendChild(grid);
+        paintPanel.appendChild(el('div', { class: 'muted', style: { fontSize: '11px', marginTop: '6px' } }, 'Выбрано: ' + D.TILES[ui.paintTile].name + '. Кликайте или ведите мышью по карте. Esc — выход.'));
+      }
+      function paintAt(cell) {
+        const x = Math.floor(cell.x);
+        const y = Math.floor(cell.y);
+        if (!G.inBounds(B.map, x, y)) return;
+        const t = D.tile(ui.paintTile);
+        if (!t.walk && G.occupant(B, x, y)) return;
+        const i = y * B.map.w + x;
+        if (B.map.cells[i] === ui.paintTile) return;
+        B.map.cells[i] = ui.paintTile;
+        board.invalidate([[x, y]]);
+      }
+
       /* ---------- Режимы ---------- */
       function setMode(mode, extra) {
         ui.mode = mode;
@@ -751,6 +797,7 @@
       }
 
       async function onBoardClick(cell, e) {
+        if (ui.mode === 'paint') return;
         if (ui.busy) return;
         const x = Math.floor(cell.x);
         const y = Math.floor(cell.y);
@@ -839,6 +886,7 @@
           case 'spell': {
             const sp = currentSpell();
             if (!sp) return;
+            if (sp.area && !(await areaHasTargets())) return;
             if (sp.area) {
               await run(() => E.castSpell(c, sp.id, ui.slot, { point: cell }, { quicken: ui.quicken }));
               setMode('move');
@@ -867,6 +915,7 @@
             return;
           }
           case 'special': {
+            if (!(await areaHasTargets())) return;
             await run(() => E.doAreaSpecial(c, ui.specialId, cell));
             setMode('move');
             return;
@@ -874,7 +923,10 @@
           case 'feature': {
             const f = E.featureActions(c).find((q) => q.id === ui.featureId);
             if (!f) return setMode('move');
-            if (f.target === 'area') await run(() => E.useFeature(c, f.id, { aim: cell }));
+            if (f.target === 'area') {
+              if (!(await areaHasTargets())) return;
+              await run(() => E.useFeature(c, f.id, { aim: cell }));
+            }
             else if (o) await run(() => E.useFeature(c, f.id, { target: o }));
             setMode('move');
             return;
@@ -894,6 +946,15 @@
           default:
             return;
         }
+      }
+
+      async function areaHasTargets() {
+        const c = cur();
+        const area = currentArea();
+        if (!c || !area) return true;
+        const hit = G.creaturesInCells(B, area.cells).filter((o) => o.uid !== c.uid && o.hp > 0);
+        if (hit.length) return true;
+        return UI.confirm('В области нет ни одного существа. Всё равно использовать?', 'Использовать');
       }
 
       async function castWithTargets() {
@@ -1368,7 +1429,10 @@
 
       // Старт
       board.showGrid = settings.grid;
-      if (params.autoplace) autoPlaceAll();
+      if (params.revalidate) {
+        for (const c of B.combatants) if (c.x >= 0 && (!G.canStand(B, c, c.x, c.y, { fly: !!c.speed.fly }) || c.x + c.cells > B.map.w || c.y + c.cells > B.map.h)) c.x = -1;
+      }
+      if (params.autoplace || params.revalidate) autoPlaceAll();
       refresh();
       if (B.phase === 'initiative') initiativeDialog();
       else if (B.phase === 'combat') {

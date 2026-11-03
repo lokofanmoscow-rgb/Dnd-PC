@@ -835,7 +835,8 @@
   };
 
   P.attackInfo = function (att, atk, tgt) {
-    const dist = G.distFt(att, tgt);
+    const realDist = G.distFt(att, tgt);
+    const dist = atk.proxyMelee && realDist <= (atk.reach || 5) ? 5 : realDist;
     let isRanged = atk.kind === 'ranged';
     if (atk.kind === 'both') isRanged = dist > (atk.reach || 5);
     const reach = atk.reach || 5;
@@ -854,7 +855,7 @@
         ok = false;
         reason = 'нет линии обзора';
       }
-    } else if (dist > 5 && !G.hasLOS(this.B.map, att, tgt)) {
+    } else if (realDist > 5 && !G.hasLOS(this.B.map, att, tgt)) {
       ok = false;
       reason = 'нет линии обзора';
     }
@@ -1378,12 +1379,12 @@
     return 1 + (lv >= 5 ? 1 : 0) + (lv >= 11 ? 1 : 0) + (lv >= 17 ? 1 : 0);
   };
 
-  P.spellDice = function (c, spell, slotLevel, dice) {
+  P.spellDice = function (c, spell, slotLevel, dice, noUpcast) {
     let p = Dice.parse(dice);
     let count = p.terms.length ? p.terms[0].count : 0;
     const sides = p.terms.length ? p.terms[0].sides : 0;
     if (spell.level === 0 && spell.scale === 'dice') count *= this.spellScale(c, spell);
-    if (spell.level > 0 && spell.upcast && spell.upcast.dice && slotLevel > spell.level) {
+    if (!noUpcast && spell.level > 0 && spell.upcast && spell.upcast.dice && slotLevel > spell.level) {
       const up = Dice.parse(spell.upcast.dice).terms[0];
       const steps = Math.floor((slotLevel - spell.level) / (spell.upcast.every || 1));
       if (up.sides === sides) count += up.count * steps;
@@ -1483,8 +1484,8 @@
         for (let i = 0; i < n; i++) {
           const tgt = list[Math.min(i, list.length - 1)];
           if (!tgt || tgt.dead) continue;
-          const dmg = spell.damage.map((dm) => {
-            let dice = this.spellDice(c, spell, slotLevel, dm.dice);
+          const dmg = spell.damage.map((dm, di) => {
+            let dice = this.spellDice(c, spell, slotLevel, dm.dice, di > 0);
             let bonus = 0;
             if (spell.id === 'eldritchblast' && f.agonizingBlast) bonus += c.mods.cha;
             if (dm.addMod) bonus += sc.mod;
@@ -1494,7 +1495,7 @@
           const atk = {
             id: 'spell_' + spell.id, name: spell.name + (n > 1 ? ' #' + (i + 1) : ''), kind: spell.attack === 'ranged' ? 'ranged' : 'melee',
             toHit: sc.toHit, reach: spell.attack === 'melee' ? Math.max(5, spell.range) : 5, range: [spell.range, spell.range],
-            dmg, isSpell: true, magical: true, spellId: spell.id,
+            dmg, isSpell: true, magical: true, spellId: spell.id, proxyMelee: spell.summon === 'spiritualWeapon',
           };
           const res = await this.attack(c, atk, tgt, {});
           if (res.hit && !tgt.dead && spell.onHit) await this.spellOnHit(c, spell, tgt, conc);
@@ -1524,7 +1525,7 @@
         if (spell.target === 'area') {
           const cells = G.areaCells(this.B.map, spell.area, c, targeting.point || { x: c.x + 2, y: c.y });
           await this.h.flashCells(cells, R.DAMAGE_COLORS[spell.damage[0].type]);
-          victims = G.creaturesInCells(this.B, cells).filter((o) => o.uid !== c.uid);
+          victims = G.creaturesInCells(this.B, cells).filter((o) => o.uid !== c.uid || spell.area.origin === 'point');
           if (f.sculptSpells && spell.school === 'evocation') {
             let protect = 1 + spell.level;
             victims = victims.filter((o) => {
@@ -1537,7 +1538,7 @@
             });
           }
         } else victims = tgts;
-        const rolled = spell.damage.map((dm, i) => ({ type: dm.type, r: Dice.roll(this.spellDice(c, spell, slotLevel, dm.dice)), bonus: i === 0 ? bonusOnce : 0 }));
+        const rolled = spell.damage.map((dm, i) => ({ type: dm.type, r: Dice.roll(this.spellDice(c, spell, slotLevel, dm.dice, i > 0)), bonus: i === 0 ? bonusOnce : 0 }));
         this.log('Урон: ' + rolled.map((x) => x.r.total + (x.bonus || 0) + ' ' + R.DAMAGE_SHORT[x.type] + ' ' + Dice.fmtRolls(x.r)).join(' + '), 'dmgroll');
         for (const o of victims) {
           if (spell.id === 'blight' && ['undead', 'construct'].includes(o.type)) {
@@ -1744,7 +1745,7 @@
           if (before <= reach && after > reach) {
             const atk = this.bestMelee(h, before);
             if (!atk) continue;
-            const yes = await this.askReactor(h, c.name + ' покидает зону досягаемости ' + h.name + '. Совершить атаку по возможности?', [
+            const yes = await this.askReactor(h, c.name + ' уходит из зоны досягаемости. ' + h.name + ': совершить атаку по возможности?', [
               { label: 'Атаковать (' + atk.name + ')', value: true },
               { label: 'Пропустить', value: false },
             ], true);
@@ -2199,7 +2200,7 @@
         if (err) return fail(err);
         t.bonusAttack = {
           count: 1,
-          spiritual: { id: 'spiritualWeaponAtk', name: 'Божественное оружие', kind: 'melee', toHit: sw.data.toHit, reach: 60, dmg: [{ dice: sw.data.dice + (sw.data.mod ? '+' + sw.data.mod : ''), type: 'force' }], isSpell: true, magical: true },
+          spiritual: { id: 'spiritualWeaponAtk', name: 'Божественное оружие', kind: 'melee', toHit: sw.data.toHit, reach: 60, proxyMelee: true, dmg: [{ dice: sw.data.dice + (sw.data.mod ? '+' + sw.data.mod : ''), type: 'force' }], isSpell: true, magical: true },
         };
         return { ok: true };
       }

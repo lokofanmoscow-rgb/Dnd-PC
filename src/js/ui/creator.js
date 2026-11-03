@@ -215,7 +215,7 @@
           { value: 'manual', label: 'Вручную' },
         ], ch.method, (v) => {
           ch.method = v;
-          if (v === 'standard') Char.applyClassDefaults(Object.assign({}, ch)), (ch.base = assignByPriority(Char.STANDARD_ARRAY));
+          if (v === 'standard') ch.base = assignByPriority(Char.STANDARD_ARRAY);
           if (v === 'pointbuy') ch.base = { str: 8, dex: 8, con: 8, int: 8, wis: 8, cha: 8 };
           if (v === 'roll') rollStats();
           rerender();

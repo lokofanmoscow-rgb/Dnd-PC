@@ -166,3 +166,108 @@ test('заклинания игроков применяются', async () => {
   assert.ok(gobs.every((g) => g.hp < g.maxHp || g.dead));
   D.Dice.setRng(null);
 });
+
+function duel(a, b, mapId) {
+  const map = D.PRESET_MAPS.find((m) => m.id === (mapId || 'preset_field'));
+  const B = D.Combat.newBattle(map);
+  B.combatants.push(a, b);
+  const E = new D.Combat.Engine(B, {});
+  return { B, E };
+}
+
+test('сопротивление, уязвимость, иммунитет', async () => {
+  const skel = D.Combat.fromMonster(D.monster('skeleton'), 'enemies');
+  const mummy = D.Combat.fromMonster(D.monster('mummy'), 'enemies');
+  const { E } = duel(skel, mummy);
+  await E.applyDamage(skel, [{ amount: 4, type: 'bludgeoning' }], null, {});
+  assert.strictEqual(skel.hp, 13 - 8, 'уязвимость удваивает');
+  await E.applyDamage(skel, [{ amount: 10, type: 'poison' }], null, {});
+  assert.strictEqual(skel.hp, 5, 'иммунитет к яду');
+  await E.applyDamage(mummy, [{ amount: 10, type: 'slashing' }], null, { magical: false });
+  assert.strictEqual(mummy.hp, 58 - 5, 'сопротивление немагическому');
+  await E.applyDamage(mummy, [{ amount: 10, type: 'slashing' }], null, { magical: true });
+  assert.strictEqual(mummy.hp, 58 - 15, 'магическое оружие — полный урон');
+});
+
+test('0 хитов: персонаж без сознания, спасброски от смерти, смерть монстра', async () => {
+  D.Dice.setRng(seeded(3));
+  const hero = D.Char.toCombatant(makeHero('fighter', 'human', 1), 'heroes');
+  const gob = D.Combat.fromMonster(D.monster('goblin'), 'enemies');
+  const { E } = duel(hero, gob);
+  await E.applyDamage(hero, [{ amount: hero.hp, type: 'slashing' }], gob, {});
+  assert.strictEqual(hero.hp, 0);
+  assert.ok(!hero.dead && E.hasCond(hero, 'unconscious') && E.hasCond(hero, 'prone'));
+  await E.applyDamage(hero, [{ amount: 1, type: 'slashing' }], gob, { crit: true });
+  assert.strictEqual(hero.death.f, 2, 'крит по лежащему — два провала');
+  await E.applyDamage(hero, [{ amount: 1, type: 'slashing' }], gob, {});
+  assert.ok(hero.dead, 'три провала — смерть');
+  await E.applyDamage(gob, [{ amount: 50, type: 'fire' }], hero, {});
+  assert.ok(gob.dead);
+  D.Dice.setRng(null);
+});
+
+test('мгновенная смерть от огромного урона', async () => {
+  const hero = D.Char.toCombatant(makeHero('wizard', 'human', 1), 'heroes');
+  const ogre = D.Combat.fromMonster(D.monster('ogre'), 'enemies');
+  const { E } = duel(hero, ogre);
+  await E.applyDamage(hero, [{ amount: hero.maxHp * 2 + 1, type: 'bludgeoning' }], ogre, {});
+  assert.ok(hero.dead);
+});
+
+test('преимущество и помеха', () => {
+  const hero = D.Char.toCombatant(makeHero('fighter', 'human', 3), 'heroes');
+  const wolf = D.Combat.fromMonster(D.monster('wolf'), 'enemies');
+  const wolf2 = D.Combat.fromMonster(D.monster('wolf'), 'enemies');
+  const { B, E } = duel(hero, wolf);
+  B.combatants.push(wolf2);
+  hero.x = 5; hero.y = 5; wolf.x = 6; wolf.y = 5; wolf2.x = 20; wolf2.y = 5;
+  const bite = wolf.attacks[0];
+  assert.strictEqual(E.attackMode(wolf, hero, bite, false, 5).mode, 0);
+  wolf2.x = 4;
+  assert.strictEqual(E.attackMode(wolf, hero, bite, false, 5).mode, 1, 'тактика стаи');
+  E.addEff(hero, { id: 'dodge', src: hero.uid });
+  assert.strictEqual(E.attackMode(wolf, hero, bite, false, 5).mode, 0, 'тактика стаи + уклонение = обычный бросок');
+  hero.effects = [];
+  const bow = hero.attacks.find((a) => a.kind === 'ranged');
+  assert.strictEqual(E.attackMode(hero, wolf2, bow, true, 5).mode, -1, 'стрельба с врагом рядом — помеха');
+  E.addCond(wolf, 'prone', {});
+  const sword = hero.attacks[0];
+  assert.strictEqual(E.attackMode(hero, wolf, sword, false, 5).mode, 1, 'лежащая цель рядом — преимущество');
+});
+
+test('концентрация прерывается уроном и снимает эффекты', async () => {
+  D.Dice.setRng(() => 0.01);
+  const cleric = D.Char.toCombatant(makeHero('cleric', 'human', 3, { spells: ['sacredflame', 'bless', 'curewounds'] }), 'heroes');
+  const ally = D.Char.toCombatant(makeHero('fighter', 'human', 3), 'heroes');
+  const gob = D.Combat.fromMonster(D.monster('goblin'), 'enemies');
+  const { B, E } = duel(cleric, ally);
+  B.combatants.push(gob);
+  cleric.x = 2; cleric.y = 2; ally.x = 3; ally.y = 2; gob.x = 10; gob.y = 10;
+  cleric.initiative = 20; ally.initiative = 10; gob.initiative = 1;
+  await E.beginCombat();
+  const r = await E.castSpell(cleric, 'bless', 1, { targets: [cleric.uid, ally.uid] });
+  assert.ok(r.ok, r.reason);
+  assert.ok(cleric.concentration && E.hasEff(ally, 'bless'));
+  await E.applyDamage(cleric, [{ amount: 5, type: 'slashing' }], gob, {});
+  assert.ok(!cleric.concentration, 'провал спасброска концентрации');
+  assert.ok(!E.hasEff(ally, 'bless'), 'Благословение снято');
+  D.Dice.setRng(null);
+});
+
+test('атака по возможности при выходе из досягаемости', async () => {
+  D.Dice.setRng(seeded(9));
+  const hero = D.Char.toCombatant(makeHero('rogue', 'human', 1), 'heroes');
+  const orc = D.Combat.fromMonster(D.monster('orc'), 'enemies');
+  const { B, E } = duel(hero, orc);
+  hero.x = 5; hero.y = 5; orc.x = 6; orc.y = 5;
+  hero.initiative = 20; orc.initiative = 1;
+  await E.beginCombat();
+  let logged = [];
+  E.h.log = (t) => logged.push(t);
+  const M = E.reachable(hero);
+  const path = D.Grid.pathTo(M, 2, 5);
+  await E.moveAlong(hero, path);
+  assert.ok(logged.some((t) => t.includes('атаку по возможности')), 'орк атакует уходящего');
+  assert.ok(orc.reactionUsed);
+  D.Dice.setRng(null);
+});

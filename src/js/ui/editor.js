@@ -328,7 +328,7 @@
 
       rootEl.appendChild(el('div', { class: 'screen' },
         el('div', { class: 'topbar' },
-          el('button', { onclick: async () => { if (await confirmDiscard()) D.App.show('menu'); } }, '← Меню'),
+          el('button', { onclick: async () => { if (await confirmDiscard()) D.App.show(params.returnBattle ? 'battle' : 'menu', params.returnBattle ? { load: params.returnBattle } : {}); } }, params.returnBattle ? '← Назад к бою' : '← Меню'),
           el('h2', {}, '🗺️ Редактор карт'),
           nameInp,
           sizeLbl,
@@ -340,7 +340,9 @@
           el('button', { onclick: () => save(true) }, 'Копия'),
           el('button', { onclick: exportMap, title: 'Сохранить в файл' }, '⬇ Экспорт'),
           el('button', { onclick: importMap, title: 'Загрузить из файла' }, '⬆ Импорт'),
-          el('button', { class: 'primary', onclick: async () => { if (dirty) save(false); D.App.show('battle', { mapId: map.id }); } }, '⚔️ Бой на этой карте')
+          params.returnBattle
+            ? el('button', { class: 'primary', onclick: () => { const rb = params.returnBattle; rb.map = U.deepClone({ id: map.id, name: map.name, w: map.w, h: map.h, cells: map.cells }); D.App.show('battle', { load: rb, revalidate: true }); } }, '↩ Вернуться в бой')
+            : el('button', { class: 'primary', onclick: async () => { if (dirty) save(false); D.App.show('battle', { mapId: map.id }); } }, '⚔️ Бой на этой карте')
         ),
         el('div', { class: 'body' }, sidebar, el('div', { class: 'col grow', style: { gap: 0 } }, wrap, el('div', { style: { padding: '4px 10px', background: 'var(--panel)', borderTop: '1px solid var(--line)', fontSize: '12px' } }, status)))
       ));

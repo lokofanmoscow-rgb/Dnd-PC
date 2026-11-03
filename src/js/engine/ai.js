@@ -115,7 +115,7 @@
   AI.wait = (opts) => U.sleep((opts && opts.delay) || 0);
 
   /* ---------- Площадные атаки ---------- */
-  AI.bestAim = function (E, c, area, from, dmgAvg, saveAb, dc) {
+  AI.bestAim = function (E, c, area, from, dmgAvg, saveAb, dc, dmgType) {
     const B = E.B;
     const fake = { x: from.x, y: from.y, cells: c.cells, uid: c.uid };
     const ctr = G.center(fake);
@@ -130,16 +130,17 @@
     else for (const e of AI.enemies(E, c)) aims.push({ x: e.x + 0.5, y: e.y + 0.5 });
     for (const aim of aims) {
       const cells = G.areaCells(B.map, area, fake, aim);
-      const hit = G.creaturesInCells(B, cells).filter((o) => o.uid !== c.uid && o.hp > 0);
+      const hit = G.creaturesInCells(B, cells).filter((o) => (o.uid !== c.uid || area.origin === 'point') && o.hp > 0);
       let score = 0;
       let hits = 0;
       for (const o of hit) {
         const fc = failChance(o.saves[saveAb] || 0, dc);
         const ev = dmgAvg * (fc + (1 - fc) * 0.5);
+        const immune = (o.immune || []).length && dmgType && o.immune.includes(dmgType);
         if (E.hostile(c, o)) {
-          score += ev;
+          if (!immune) score += ev;
           hits++;
-        } else score -= ev * 1.5;
+        } else if (!immune) score -= ev * (o.uid === c.uid ? 4 : 1.5);
       }
       if (score > best.score) best = { score, aim, hits };
     }
@@ -200,7 +201,7 @@
     }
     if (s.kind === 'save' && s.target === 'area') {
       const avg = s.damage.reduce((sum, d) => sum + Dice.average(E.spellDice(c, s, slot, d.dice)), 0);
-      const aim = AI.bestAim(E, c, s.area, c, avg, s.save, sc.dc);
+      const aim = AI.bestAim(E, c, s.area, c, avg, s.save, sc.dc, s.damage[0].type);
       if (!aim.aim) return null;
       if (s.area.origin === 'point' && G.distToCellFt(c, Math.floor(aim.aim.x), Math.floor(aim.aim.y)) > s.range) return null;
       return { ev: aim.score, point: aim.aim };
@@ -290,7 +291,8 @@
     for (const s of c.specials) {
       if (s.type !== 'area' || (c.recharge && c.recharge[s.id] === false) || t.actions <= 0) continue;
       const avg = avgList(s.dmg);
-      let best = AI.bestAim(E, c, s.area, c, avg, s.save, s.dc);
+      const dt = s.dmg && s.dmg[0] ? s.dmg[0].type : null;
+      let best = AI.bestAim(E, c, s.area, c, avg, s.save, s.dc, dt);
       let moveTo = null;
       if (best.hits < 2) {
         const M = G.reach(B, c, Math.floor(t.move / 5), { fly, avoidHazards: true });
@@ -302,7 +304,7 @@
         }
         cand.sort((a, b) => a.dn - b.dn);
         for (const { rec } of cand.slice(0, 25)) {
-          const b2 = AI.bestAim(E, c, s.area, rec, avg, s.save, s.dc);
+          const b2 = AI.bestAim(E, c, s.area, rec, avg, s.save, s.dc, dt);
           if (b2.score > best.score * 1.15) {
             best = b2;
             moveTo = { rec, M };
@@ -314,7 +316,7 @@
         if (moveTo) {
           await AI.moveTo(E, c, moveTo.M, moveTo.rec.x, moveTo.rec.y);
           await AI.wait(opts);
-          best = AI.bestAim(E, c, s.area, c, avg, s.save, s.dc);
+          best = AI.bestAim(E, c, s.area, c, avg, s.save, s.dc, dt);
         }
         if (best.aim && !c.dead && c.hp > 0) {
           await E.doAreaSpecial(c, s.id, best.aim);
