@@ -177,8 +177,73 @@
   UI.face = function (c, cls) {
     const f = el('div', { class: cls || 'face', style: { borderColor: c.color || (D.R.SIDES[c.side] || {}).color } });
     if (c.portrait) f.appendChild(el('img', { src: c.portrait }));
-    else f.appendChild(document.createTextNode(c.icon || '?'));
+    else f.appendChild(UI.icon(c.icon));
     return f;
+  };
+
+  /* Иконка game-icons.net (SVG) или эмодзи/текст для своих монстров */
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  UI.icon = function (key, opts) {
+    opts = opts || {};
+    const d = key && D.ICONS && D.ICONS[key];
+    if (!d) return el('span', { class: 'ico-emoji' + (opts.cls ? ' ' + opts.cls : '') }, key || '?');
+    const svg = document.createElementNS(SVGNS, 'svg');
+    svg.setAttribute('viewBox', '0 0 512 512');
+    svg.setAttribute('class', 'gi' + (opts.cls ? ' ' + opts.cls : ''));
+    if (opts.size) {
+      svg.setAttribute('width', opts.size);
+      svg.setAttribute('height', opts.size);
+    }
+    const p = document.createElementNS(SVGNS, 'path');
+    p.setAttribute('d', d);
+    p.setAttribute('fill', opts.color || 'currentColor');
+    svg.appendChild(p);
+    if (opts.title) {
+      const t = document.createElementNS(SVGNS, 'title');
+      t.textContent = opts.title;
+      svg.appendChild(t);
+    }
+    return svg;
+  };
+
+  /* Выбор иконки из набора game-icons.net */
+  UI.pickIcon = function (current) {
+    const keys = Object.keys(D.ICONS || {}).sort();
+    let picked = current;
+    const q = el('input', { placeholder: '🔍 Поиск по названию (англ.)', style: { width: '100%', marginBottom: '8px' } });
+    const grid = el('div', { class: 'icon-grid', style: { maxHeight: '60vh', overflowY: 'auto', gridTemplateColumns: 'repeat(auto-fill, minmax(64px, 1fr))' } });
+    const draw = () => {
+      U.clear(grid);
+      const f = q.value.trim().toLowerCase();
+      for (const k of keys) {
+        if (f && !k.includes(f)) continue;
+        grid.appendChild(el('div', { class: 'opt' + (k === picked ? ' sel' : ''), title: k, onclick: () => { picked = k; m.close(k); } }, UI.icon(k)));
+      }
+    };
+    q.oninput = draw;
+    const m = UI.modal({ title: 'Выберите значок', body: el('div', { style: { width: '640px', maxWidth: '86vw' } }, q, grid), buttons: [{ label: 'Отмена', value: null }] });
+    draw();
+    return m.promise;
+  };
+  /* Поле выбора значка: кнопка с иконкой + поле для эмодзи */
+  UI.iconField = function (value) {
+    let cur = value || '';
+    const prev = el('button', { class: 'small', type: 'button', style: { fontSize: '22px', minWidth: '44px' } });
+    const emoji = el('input', { placeholder: 'или эмодзи', style: { width: '90px' }, value: D.ICONS && D.ICONS[cur] ? '' : cur, oninput: () => { if (emoji.value.trim()) { cur = emoji.value.trim(); show(); } } });
+    const show = () => {
+      U.clear(prev);
+      prev.appendChild(UI.icon(cur || 'cowled'));
+    };
+    prev.onclick = async () => {
+      const k = await UI.pickIcon(cur);
+      if (k) {
+        cur = k;
+        emoji.value = '';
+        show();
+      }
+    };
+    show();
+    return { el: el('div', { class: 'row' }, prev, emoji), get: () => cur };
   };
 
   /* Уменьшить картинку до квадрата 256×256 */
@@ -225,7 +290,7 @@
       const bg = el('canvas', { class: 'bg' });
       const saves = Store.battles();
       const card = el('div', { class: 'menu-card' },
-        el('div', { class: 'logo' }, '🐉'),
+        el('div', { class: 'logo' }, UI.icon('dragon-head')),
         el('h1', {}, 'Подземелья и Драконы'),
         el('div', { class: 'subtitle' }, 'Тактический боевой стол · 5-я редакция'),
         el('div', { class: 'menu-buttons' },
@@ -238,7 +303,7 @@
           el('button', { onclick: () => window.close() }, '🚪  Выход')
         ),
         el('div', { class: 'menu-footer' }, 'Игра на одном компьютере: игроки ходят по очереди. ', el('br'),
-          'Механики и бестиарий — SRD 5.1 (CC-BY-4.0). Полные правила: ', el('a', { href: 'https://dnd.su/', target: '_blank' }, 'dnd.su'))
+          'Механики и бестиарий — SRD 5.1 (CC-BY-4.0). Иконки — game-icons.net (CC BY 3.0). Полные правила: ', el('a', { href: 'https://dnd.su/', target: '_blank' }, 'dnd.su'))
       );
       rootEl.appendChild(el('div', { class: 'menu-screen' }, bg, card));
       // Декоративный фон из клеток
@@ -299,7 +364,7 @@
 <h3>Как играть</h3>
 <p>Все игроки сидят за одним компьютером. Каждый управляет своим персонажем, когда наступает его ход по инициативе. Монстрами управляет ИИ или ведущий (ДМ) — это выбирается для каждого участника при подготовке боя.</p>
 <ol>
-<li><b>Персонажи</b> — создайте героев: раса, класс, уровень (1–10), характеристики (стандартный набор, покупка очков или бросок 4d6), навыки, снаряжение и заклинания.</li>
+<li><b>Персонажи</b> — создайте героев: раса, класс и подкласс, уровень (1–20), характеристики (стандартный набор, покупка очков или бросок 4d6), навыки, снаряжение и заклинания.</li>
 <li><b>Редактор карт</b> — нарисуйте поле боя: пол, стены, двери, деревья, вода, лава, мебель. Или возьмите готовую карту.</li>
 <li><b>Новый бой</b> — выберите карту, добавьте героев и монстров из бестиария, расставьте их на поле (клик по участнику в списке, затем по клетке; жетоны можно перетаскивать).</li>
 <li><b>Инициатива</b> — каждый игрок по очереди нажимает «Бросить» (или вводит результат с настоящего кубика). Затем начинается бой.</li>
@@ -329,7 +394,7 @@
 <tr><td>Пробел / Enter</td><td>Закончить ход</td></tr>
 <tr><td>F11 / F12</td><td>Полный экран / консоль разработчика</td></tr>
 </table>
-<p class="muted">Игровая механика основана на System Reference Document 5.1 (Wizards of the Coast, CC-BY-4.0). Полные тексты правил, заклинаний и бестиария на русском — на <a href="https://dnd.su/" target="_blank">dnd.su</a>.</p>
+<p class="muted">Игровая механика и бестиарий основаны на System Reference Document 5.1 (Wizards of the Coast, CC-BY-4.0). Иконки — <a href="https://game-icons.net" target="_blank">game-icons.net</a> (Lorc, Delapouite и др., CC BY 3.0). Полные тексты правил, заклинаний и бестиария на русском — на <a href="https://dnd.su/" target="_blank">dnd.su</a>.</p>
 `;
 
   /* ---------- Запуск ---------- */

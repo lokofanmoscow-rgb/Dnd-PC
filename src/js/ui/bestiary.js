@@ -25,7 +25,7 @@
 
   D.monsterEditor = function (base) {
     const m = base ? U.deepClone(base) : {
-      id: '', name: 'Новый монстр', en: 'Homebrew', size: 'medium', type: 'monstrosity', align: 'нейтральный', icon: '👾',
+      id: '', name: 'Новый монстр', en: 'Homebrew', size: 'medium', type: 'monstrosity', align: 'нейтральный', icon: 'horned-reptile',
       ac: 13, acNote: 'природный доспех', hp: 22, hd: '4d8+4', speed: { walk: 30 }, abil: { str: 14, dex: 12, con: 13, int: 6, wis: 10, cha: 7 },
       senses: 'пассивное Восприятие 10', lang: '—', cr: '1', flags: {}, traits: [],
       actions: [{ id: 'a1', name: 'Удар', type: 'mw', toHit: 4, reach: 5, dmg: [{ dice: '1d8+2', type: 'slashing' }] }],
@@ -38,7 +38,7 @@
     const inp = (v, attrs) => el('input', Object.assign({ value: v == null ? '' : v }, attrs || {}));
     const num = (v, min, max) => el('input', { type: 'number', value: v, min: min == null ? 0 : min, max: max == null ? 999 : max, style: { width: '64px' } });
     const f = {
-      name: inp(m.name, { style: { width: '100%' } }), icon: inp(m.icon, { style: { width: '60px', fontSize: '20px' } }),
+      name: inp(m.name, { style: { width: '100%' } }), icon: D.UI.iconField(m.icon),
       size: U.select(Object.keys(R.SIZES).map((k) => ({ value: k, label: R.SIZES[k].name })), m.size),
       type: U.select(Object.keys(R.CREATURE_TYPES).map((k) => ({ value: k, label: R.CREATURE_TYPES[k] })), m.type),
       ac: num(m.ac, 1, 30), acNote: inp(m.acNote || ''), hp: num(m.hp, 1, 999),
@@ -103,7 +103,7 @@
 
     const body = el('div', { style: { width: '900px', maxWidth: '88vw' } },
       el('div', { class: 'form-grid', style: { gridTemplateColumns: '120px 1fr 120px 1fr' } },
-        el('label', {}, 'Название'), f.name, el('label', {}, 'Значок (эмодзи)'), f.icon,
+        el('label', {}, 'Название'), f.name, el('label', {}, 'Значок'), f.icon.el,
         el('label', {}, 'Размер'), f.size, el('label', {}, 'Тип'), f.type,
         el('label', {}, 'КД'), el('div', { class: 'row' }, f.ac, f.acNote), el('label', {}, 'Хиты'), f.hp,
         el('label', {}, 'Скорость'), el('div', { class: 'row' }, f.walk, el('span', { class: 'muted' }, 'полёт'), f.fly, el('span', { class: 'muted' }, 'плав.'), f.swim),
@@ -127,7 +127,7 @@
       if (!ok) return null;
       const out = isCopy || !base ? Object.assign(U.deepClone(m), { id: U.uid('mon'), custom: true }) : Object.assign(m, { custom: true });
       out.name = f.name.value.trim() || 'Безымянный';
-      out.icon = f.icon.value.trim() || '👾';
+      out.icon = f.icon.get() || 'horned-reptile';
       out.en = out.en || 'Homebrew';
       out.size = f.size.value;
       out.type = f.type.value;
@@ -148,6 +148,9 @@
       out.resist = resist.get();
       out.immune = immune.get();
       out.vuln = vuln.get();
+      delete out.resistText;
+      delete out.immuneText;
+      delete out.vulnText;
       const flags = Object.assign({}, out.flags);
       for (const [k] of flagDefs) {
         if (flagEls[k].checked) flags[k] = true;
@@ -209,35 +212,52 @@
 
   D.renderStatblock = function (m) {
     const sb = el('div', { class: 'statblock' });
-    sb.appendChild(el('div', { class: 'token' }, m.icon));
+    sb.appendChild(el('div', { class: 'token' }, D.UI.icon(m.icon)));
     sb.appendChild(el('h2', {}, m.name));
     sb.appendChild(el('div', { class: 'en' }, m.en || ''));
-    sb.appendChild(el('div', { class: 'type' }, R.SIZES[m.size].name + ' ' + (R.CREATURE_TYPES[m.type] || m.type).toLowerCase() + ', ' + m.align));
+    sb.appendChild(el('div', { class: 'type' }, R.SIZES[m.size].name + ' ' + (R.CREATURE_TYPES[m.type] || m.type).toLowerCase() + (m.subtype ? ' (' + m.subtype + ')' : '') + ', ' + (m.align || 'без мировоззрения')));
     sb.appendChild(el('div', { class: 'rule' }));
     const sp = m.speed || {};
-    const speedTxt = [sp.walk + ' фт.'].concat(sp.climb ? ['лазая ' + sp.climb + ' фт.'] : [], sp.fly ? ['летая ' + sp.fly + ' фт.'] : [], sp.swim ? ['плавая ' + sp.swim + ' фт.'] : [], sp.burrow ? ['копая ' + sp.burrow + ' фт.'] : []).join(', ');
+    const speedTxt = [(sp.walk || 0) + ' фт.'].concat(sp.climb ? ['лазая ' + sp.climb + ' фт.'] : [], sp.fly ? ['летая ' + sp.fly + ' фт.' + (sp.hover ? ' (парит)' : '')] : [], sp.swim ? ['плавая ' + sp.swim + ' фт.'] : [], sp.burrow ? ['копая ' + sp.burrow + ' фт.'] : []).join(', ');
     const prop = (k, v) => el('div', { class: 'prop' }, el('b', {}, k + ' '), v);
     sb.appendChild(prop('Класс Доспеха', m.ac + (m.acNote ? ' (' + m.acNote + ')' : '')));
-    sb.appendChild(prop('Хиты', m.hp + ' (' + m.hd.replace('+', ' + ').replace('-', ' − ') + ')'));
+    sb.appendChild(prop('Хиты', m.hp + (m.hd ? ' (' + m.hd.replace('d', 'к').replace('+', ' + ').replace('-', ' − ') + ')' : '')));
     sb.appendChild(prop('Скорость', speedTxt));
     sb.appendChild(el('div', { class: 'rule' }));
     sb.appendChild(el('div', { class: 'abil' }, R.ABILITIES.map((ab) => el('div', {}, el('b', {}, R.ABILITY_SHORT[ab]), m.abil[ab] + ' (' + U.fmtMod(U.mod(m.abil[ab])) + ')'))));
     sb.appendChild(el('div', { class: 'rule' }));
-    if (m.saves) sb.appendChild(prop('Спасброски', Object.keys(m.saves).map((k) => R.ABILITY_SHORT[k] + ' ' + U.fmtMod(m.saves[k])).join(', ')));
-    if (m.skills) sb.appendChild(prop('Навыки', Object.keys(m.skills).map((k) => SKILL_NAMES[k].name + ' ' + U.fmtMod(m.skills[k])).join(', ')));
-    if (m.vuln && m.vuln.length) sb.appendChild(prop('Уязвимость к урону', m.vuln.map((t) => R.DAMAGE_SHORT[t]).join(', ')));
-    if ((m.resist && m.resist.length) || m.resistNonmagical)
-      sb.appendChild(prop('Сопротивление урону', (m.resist || []).map((t) => R.DAMAGE_SHORT[t]).concat(m.resistNonmagical ? ['дробящий, колющий и рубящий урон от немагических атак'] : []).join('; ')));
-    if (m.immune && m.immune.length) sb.appendChild(prop('Иммунитет к урону', m.immune.map((t) => R.DAMAGE_SHORT[t]).join(', ')));
-    if (m.condImmune && m.condImmune.length) sb.appendChild(prop('Иммунитет к состояниям', m.condImmune.map((c) => R.CONDITIONS[c].name.toLowerCase()).join(', ')));
-    sb.appendChild(prop('Чувства', m.senses));
-    sb.appendChild(prop('Языки', m.lang));
-    sb.appendChild(prop('Опасность', m.cr + ' (' + (m.xp || 0).toLocaleString('ru-RU') + ' опыта)' + '   Бонус мастерства ' + U.fmtMod(m.prof)));
+    if (m.saves && Object.keys(m.saves).length) sb.appendChild(prop('Спасброски', Object.keys(m.saves).map((k) => R.ABILITY_SHORT[k] + ' ' + U.fmtMod(m.saves[k])).join(', ')));
+    if (m.skills && Object.keys(m.skills).length) sb.appendChild(prop('Навыки', Object.keys(m.skills).filter((k) => SKILL_NAMES[k]).map((k) => SKILL_NAMES[k].name + ' ' + U.fmtMod(m.skills[k])).join(', ')));
+    const dmgList = (arr, extra) => (arr || []).map((t) => R.DAMAGE_TYPES[t] || t).concat(extra || []).join(', ');
+    const nonmag = 'дробящий, колющий и рубящий урон от немагических атак';
+    const vulnTxt = m.vulnText != null ? m.vulnText : dmgList(m.vuln);
+    const resTxt = m.resistText != null ? m.resistText : dmgList(m.resist, m.resistNonmagical ? [nonmag] : []);
+    const immTxt = m.immuneText != null ? m.immuneText : dmgList(m.immune, m.immuneNonmagical ? [nonmag] : []);
+    if (vulnTxt) sb.appendChild(prop('Уязвимость к урону', vulnTxt));
+    if (resTxt) sb.appendChild(prop('Сопротивление урону', resTxt));
+    if (immTxt) sb.appendChild(prop('Иммунитет к урону', immTxt));
+    if (m.condImmune && m.condImmune.length) sb.appendChild(prop('Иммунитет к состояниям', m.condImmune.filter((c) => R.CONDITIONS[c]).map((c) => R.CONDITIONS[c].name.toLowerCase()).join(', ')));
+    sb.appendChild(prop('Чувства', m.senses || '—'));
+    sb.appendChild(prop('Языки', m.lang || '—'));
+    sb.appendChild(prop('Опасность', m.cr + ' (' + (m.xp || 0).toLocaleString('ru-RU') + ' опыта)' + '   Бонус мастерства ' + U.fmtMod(m.prof || R.crProf(m.cr))));
     sb.appendChild(el('div', { class: 'rule' }));
     for (const t of m.traits || []) sb.appendChild(el('p', {}, el('b', {}, el('i', {}, t.name + '. ')), t.desc));
+    if (m.spellcasting) {
+      const known = (m.spellcasting.spellsEn || []).concat(Object.keys(m.spellcasting.innate || {})).map((en) => D.spellByEn(en)).filter(Boolean);
+      if (known.length) sb.appendChild(el('p', { class: 'muted', style: { fontSize: '12px' } }, 'В бою доступны заклинания: ' + known.map((x) => x.name).join(', ') + '.'));
+    }
     sb.appendChild(el('h4', {}, 'Действия'));
-    for (const a of m.actions || []) sb.appendChild(el('p', {}, el('b', {}, el('i', {}, a.name + '. ')), D.describeAction(a)));
-    if (m.flags && m.flags.legendaryResistance) sb.appendChild(el('p', { style: { fontSize: '12px', color: '#7a5a3a' } }, 'Легендарные действия в этой версии не используются.'));
+    for (const a of m.actions || []) sb.appendChild(el('p', {}, el('b', {}, el('i', {}, a.name + (a.recharge ? ' (перезарядка ' + (a.recharge < 6 ? a.recharge + '–6' : '6') + ')' : a.perDay ? ' (' + a.perDay + '/день)' : '') + '. ')), D.describeAction(a)));
+    if (m.reactions && m.reactions.length) {
+      sb.appendChild(el('h4', {}, 'Реакции'));
+      for (const r of m.reactions) sb.appendChild(el('p', {}, el('b', {}, el('i', {}, r.name + '. ')), r.desc));
+    }
+    if (m.legendary && m.legendary.length) {
+      sb.appendChild(el('h4', {}, 'Легендарные действия'));
+      const n = m.legendaryCount || 3;
+      sb.appendChild(el('p', {}, 'Может совершить ' + n + ' ' + U.plural(n, 'легендарное действие', 'легендарных действия', 'легендарных действий') + ', выбирая из представленных ниже вариантов. За один раз можно использовать только одно легендарное действие, и только в конце хода другого существа. Потраченные легендарные действия восстанавливаются в начале его хода.'));
+      for (const l of m.legendary) sb.appendChild(el('p', {}, el('b', {}, el('i', {}, l.name + '. ')), l.desc || '', l.kind === 'info' ? el('span', { class: 'muted', style: { fontSize: '11px' } }, ' (описательное)') : null));
+    }
     return sb;
   };
 
@@ -255,7 +275,9 @@
       { value: '0-0.5', label: 'ПО 0 – 1/2' },
       { value: '1-2', label: 'ПО 1 – 2' },
       { value: '3-5', label: 'ПО 3 – 5' },
-      { value: '6-30', label: 'ПО 6+' },
+      { value: '6-10', label: 'ПО 6 – 10' },
+      { value: '11-16', label: 'ПО 11 – 16' },
+      { value: '17-30', label: 'ПО 17+' },
     ], '', (v) => { state.cr = v; drawList(); });
     function filtered() {
       return all().filter((m) => {
@@ -273,7 +295,7 @@
       U.clear(listEl);
       for (const m of filtered()) {
         listEl.appendChild(el('div', { class: 'list-item' + (m.id === state.sel ? ' sel' : ''), onclick: () => { state.sel = m.id; drawList(); drawDetail(); }, ondblclick: () => opts.onPick && opts.onPick(m) },
-          el('span', { class: 'ico' }, m.icon), el('div', {}, el('div', {}, m.name), el('div', { class: 'muted', style: { fontSize: '11px' } }, R.CREATURE_TYPES[m.type] + (m.custom ? ' · свой' : ''))), el('span', { class: 'cr' }, 'ПО ' + m.cr)));
+          el('span', { class: 'ico' }, D.UI.icon(m.icon)), el('div', { class: 'grow' }, el('div', {}, m.name), el('div', { class: 'muted', style: { fontSize: '11px' } }, R.CREATURE_TYPES[m.type] + (m.custom ? ' · свой' : ''))), el('span', { class: 'cr' }, 'ПО ' + m.cr)));
       }
     }
     function drawDetail() {
@@ -328,7 +350,7 @@
               D.UI.toast('Не удалось прочитать файл', 'bad');
             }
           } }, '⬆ Импорт'),
-          el('a', { href: 'https://dnd.su/bestiary/', target: '_blank' }, 'Полный бестиарий на dnd.su ↗')),
+          el('a', { href: 'https://dnd.su/bestiary/', target: '_blank' }, 'dnd.su ↗')),
         br.el));
     },
   });

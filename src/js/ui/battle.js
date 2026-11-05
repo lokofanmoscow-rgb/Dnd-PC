@@ -265,7 +265,7 @@
           const row = el('div', { class: 'p-row' + (ui.placing === c.uid ? ' sel' : ''), title: 'Клик — выбрать и поставить на клетку' },
             UI.face(c, 'ico'),
             el('div', { class: 'nm', onclick: () => { ui.placing = ui.placing === c.uid ? null : c.uid; if (c.x >= 0) board.centerOn(c.x, c.y); refresh(); } },
-              c.name, c.x < 0 ? el('div', { class: 'unplaced' }, 'не на поле') : el('div', { class: 'muted', style: { fontSize: '11px' } }, (c.kind === 'pc' ? c.clsName + ' ' + c.level : 'ПО ' + c.cr) + ' · ❤️' + c.maxHp + ' · 🛡️' + c.ac)),
+              c.name, c.x < 0 ? el('div', { class: 'unplaced' }, 'не на поле') : el('div', { class: 'muted', style: { fontSize: '11px' } }, (c.kind === 'pc' ? c.clsName + ' ' + c.level : 'ПО ' + c.cr) + ' · ❤️' + c.maxHp + ' · 🛡️' + c.ac + (c.customMaxHp || c.customAc ? ' ✎' : ''))),
             U.select(Object.keys(R.SIDES).map((k) => ({ value: k, label: R.SIDES[k].name })), c.side, (v) => { c.side = v; if (c.kind !== 'pc') c.color = R.SIDES[v].color; refresh(); }, { title: 'Сторона' }),
             U.select([{ value: 'human', label: '🎮' }, { value: 'ai', label: '🤖' }], c.controller, (v) => { c.controller = v; refresh(); }, { title: 'Управление: игрок / ИИ' }),
             el('button', { class: 'small ghost', title: 'Убрать', onclick: () => { B.combatants = B.combatants.filter((o) => o !== c); if (ui.placing === c.uid) ui.placing = null; refresh(); } }, '✕'));
@@ -315,7 +315,8 @@
             el('li', {}, 'Нажмите «Начать бой» — игроки по очереди бросят инициативу.')));
           if (sel) {
             scroll.appendChild(el('div', { class: 'section-title' }, 'Выбран: ' + sel.name));
-            scroll.appendChild(el('div', { class: 'muted' }, 'Кликните по свободной клетке, чтобы поставить жетон.'));
+            scroll.appendChild(el('div', { class: 'muted' }, sel.x < 0 ? 'Кликните по свободной клетке, чтобы поставить жетон.' : 'Кликните по клетке, чтобы переставить жетон.'));
+            scroll.appendChild(statEditor(sel));
             scroll.appendChild(compactInfo(sel));
           }
           right.appendChild(scroll);
@@ -357,6 +358,73 @@
         right.appendChild(scroll);
       }
 
+      /* Правка максимума хитов и КД участника при подготовке */
+      function statEditor(c) {
+        const hp = el('input', { type: 'number', min: 1, max: 9999, value: c.maxHp, style: { width: '80px' } });
+        const ac = el('input', { type: 'number', min: 1, max: 40, value: c.ac, style: { width: '64px' } });
+        const apply = () => {
+          const h = U.clamp(Math.round(Number(hp.value)) || c.maxHp, 1, 9999);
+          const a = U.clamp(Math.round(Number(ac.value)) || c.ac, 1, 40);
+          if (h !== c.maxHp) {
+            c.maxHp = h;
+            c.hp = h;
+            c.customMaxHp = h;
+          }
+          if (a !== c.ac) {
+            c.ac = a;
+            c.customAc = a;
+          }
+          setTimeout(refresh, 0);
+        };
+        hp.addEventListener('change', apply);
+        ac.addEventListener('change', apply);
+        hp.addEventListener('keydown', (e) => e.key === 'Enter' && hp.blur());
+        ac.addEventListener('keydown', (e) => e.key === 'Enter' && ac.blur());
+        return el('div', { class: 'stat-edit' },
+          el('label', {}, '❤️ Макс. хитов', hp),
+          el('label', {}, '🛡️ КД', ac),
+          el('button', { class: 'small ghost', title: 'Вернуть исходные значения', onclick: () => resetStats(c) }, '↺'));
+      }
+      function resetStats(c) {
+        let base = null;
+        if (c.kind === 'pc') {
+          const ch = Store.characters().find((x) => x.id === c.refId);
+          if (ch) base = D.Char.toCombatant(ch, c.side);
+        } else {
+          const m = D.monster(c.refId);
+          if (m) base = D.Combat.fromMonster(m, c.side, {});
+        }
+        if (!base) return;
+        if (!c.companionOf) {
+          c.maxHp = c.hp = base.maxHp;
+          c.ac = base.ac;
+        }
+        delete c.customMaxHp;
+        delete c.customAc;
+        refresh();
+      }
+      async function editStatsDialog(o) {
+        const hp = el('input', { type: 'number', min: 1, max: 9999, value: o.maxHp });
+        const ac = el('input', { type: 'number', min: 1, max: 40, value: o.ac });
+        const r = await UI.modal({
+          title: o.name + ': хиты и КД',
+          body: el('div', { class: 'form-grid' }, el('label', {}, 'Максимум хитов'), hp, el('label', {}, 'Класс Доспеха'), ac),
+          buttons: [{ label: 'Отмена', value: null }, { label: 'Применить', cls: 'primary', value: true }],
+        }).promise;
+        if (!r) return;
+        const h = U.clamp(Math.round(Number(hp.value)) || o.maxHp, 1, 9999);
+        const a = U.clamp(Math.round(Number(ac.value)) || o.ac, 1, 40);
+        if (B.phase === 'setup' || B.phase === 'initiative') o.hp = h;
+        else if (h > o.maxHp && o.hp > 0) o.hp += h - o.maxHp;
+        o.maxHp = h;
+        o.hp = Math.min(o.hp, h);
+        o.ac = a;
+        o.customMaxHp = h;
+        o.customAc = a;
+        if (B.phase === 'combat') E.log('Ведущий меняет ' + E.name(o) + ': макс. хитов ' + h + ', КД ' + a + '.', 'muted');
+        refresh();
+      }
+
       function compactInfo(c) {
         const box = el('div', { class: 'col', style: { marginTop: '8px', gap: '4px', fontSize: '12px' } });
         box.appendChild(el('div', {}, '❤️ ' + c.hp + '/' + c.maxHp + ' · 🛡️ КД ' + c.ac + ' · 👣 ' + c.speed.walk + ' фт.' + (c.speed.fly ? ' (полёт ' + c.speed.fly + ')' : '')));
@@ -392,7 +460,7 @@
         for (const e of c.effects) {
           const d = R.EFFECTS[e.id];
           if (!d || e.silent) continue;
-          chips.appendChild(el('span', { class: 'chip ' + (['mockery', 'slowed', 'noReactions', 'hex', 'hunterMark', 'guidingBolt', 'reckless', 'helped'].includes(e.id) ? 'bad' : 'good') }, d.icon + ' ' + d.name + (e.id === 'inspiration' ? ' (к' + e.value + ')' : '')));
+          chips.appendChild(el('span', { class: 'chip ' + (['mockery', 'slowed', 'noReactions', 'hex', 'hunterMark', 'guidingBolt', 'reckless', 'helped', 'faerieFire', 'slowSpell', 'vowOfEnmity', 'acidArrow', 'entropicMark'].includes(e.id) ? 'bad' : 'good') }, d.icon + ' ' + d.name + (e.id === 'inspiration' ? ' (к' + e.value + ')' : '')));
         }
         if (c.concentration) chips.appendChild(el('span', { class: 'chip spell', title: 'Нажмите, чтобы прекратить концентрацию', style: { cursor: 'pointer' }, onclick: () => { E.endConcentration(c, 'добровольно'); refresh(); } }, '🧠 ' + c.concentration.name + ' ✕'));
         if (chips.childNodes.length) card.appendChild(chips);
@@ -453,10 +521,10 @@
         if (specials.length) {
           scroll.appendChild(grp('Особые способности', specials.map((s) => el('button', {
             class: ui.mode === 'special' && ui.specialId === s.id ? 'toggled' : '',
-            disabled: busy || t.actions <= 0 || (c.recharge && c.recharge[s.id] === false),
+            disabled: busy || t.actions <= 0 || !E.specialReady(c, s),
             title: D.describeAction(s),
             onclick: () => setMode('special', { specialId: s.id }),
-          }, s.name + (c.recharge && c.recharge[s.id] === false ? ' (не готово)' : '')))));
+          }, s.name + (!E.specialReady(c, s) ? ' (не готово)' : c.uses && c.uses[s.id] ? ' (' + (c.uses[s.id].max - c.uses[s.id].used) + ')' : '')))));
         }
         // Заклинания
         if (c.spells && c.spells.length && c.spellcasting) {
@@ -471,7 +539,9 @@
               btns.appendChild(el('button', { disabled: true, title: sp.desc + ' (накладывается автоматически, игра спросит)' }, sp.name + ' ↩'));
               continue;
             }
-            const minSlot = sp.level ? E.lowestSlot(c, sp.level) : 0;
+            let minSlot = sp.level ? E.lowestSlot(c, sp.level) : 0;
+            const innate = sp.level > 0 && !minSlot && E.usesInnate(c, sp, 0);
+            if (innate) minSlot = 'innate';
             const err = E.castCheck(c, sp, minSlot || sp.level || 0);
             const quickOk = c.flags && c.flags.quickenedSpell && sp.cast === 'action' && !E.castCheck(c, sp, minSlot || sp.level || 0, { quicken: true });
             btns.appendChild(el('button', {
@@ -479,7 +549,7 @@
               disabled: busy || (!!err && !quickOk) || (sp.level > 0 && !minSlot),
               title: sp.desc + (err ? '\n\n⛔ ' + err : '') + (sp.concentration ? '\n(концентрация)' : ''),
               onclick: () => startSpell(c, sp, !!err && quickOk),
-            }, (sp.level ? sp.level + '◆ ' : '') + sp.name + (sp.cast === 'bonus' ? ' ✴' : '') + (sp.concentration ? ' 🧠' : '')));
+            }, (sp.level ? sp.level + '◆ ' : '') + sp.name + (innate ? ' ◇' : '') + (sp.cast === 'bonus' ? ' ✴' : '') + (sp.concentration ? ' 🧠' : '')));
           }
           g.appendChild(btns);
           scroll.appendChild(g);
@@ -566,7 +636,8 @@
       }
 
       function startSpell(c, sp, quicken) {
-        const slot = sp.level ? E.lowestSlot(c, sp.level) : 0;
+        let slot = sp.level ? E.lowestSlot(c, sp.level) : 0;
+        if (sp.level && !slot && E.usesInnate(c, sp, 0)) slot = 'innate';
         if (sp.target === 'self' || (sp.area && sp.area.shape === 'aura' && sp.kind !== 'save')) {
           return run(() => E.castSpell(c, sp.id, slot, {}, { quicken }));
         }
@@ -630,7 +701,13 @@
           const f = E.featureActions(c).find((x) => x.id === ui.featureId);
           if (f && f.area) {
             area = Object.assign({ origin: 'self' }, f.area);
-            color = R.DAMAGE_COLORS[c.ancestry.type];
+            color = f.color || (c.ancestry ? R.DAMAGE_COLORS[c.ancestry.type] : color);
+          }
+          if (f && f.target === 'point') {
+            const x = Math.floor(ui.hover.x);
+            const y = Math.floor(ui.hover.y);
+            const ok = G.distToCellFt(c, x, y) <= (f.range || 30) && G.canStand(B, c, x, y, { fly: true }) && G.canEndAt(B, c, x, y);
+            return { cells: [[x, y]], color: ok ? '#9be7ff' : '#ff5050' };
           }
         }
         if (!area) return null;
@@ -684,6 +761,7 @@
           if (!f) return null;
           if (f.target === 'ally') return B.combatants.filter((o) => o.x >= 0 && !o.dead && !E.hostile(c, o) && G.distFt(c, o) <= (f.range || 5));
           if (f.target === 'allyOther') return all.filter((o) => !o.dead && !E.hostile(c, o) && G.distFt(c, o) <= (f.range || 60));
+          if (f.target === 'enemy') return all.filter((o) => !o.dead && E.hostile(c, o) && G.distFt(c, o) <= (f.range || 5) && (f.filter !== 'quivering' || o.quivering === c.uid));
           return null;
         }
         if (ui.mode === 'action') {
@@ -926,7 +1004,7 @@
             if (f.target === 'area') {
               if (!(await areaHasTargets())) return;
               await run(() => E.useFeature(c, f.id, { aim: cell }));
-            }
+            } else if (f.target === 'point') await run(() => E.useFeature(c, f.id, { point: cell }));
             else if (o) await run(() => E.useFeature(c, f.id, { target: o }));
             setMode('move');
             return;
@@ -988,6 +1066,7 @@
         items.push({ icon: '🗡️', label: 'Нанести урон…', onClick: () => dmDamage(o) });
         items.push({ icon: '💚', label: 'Вылечить…', onClick: async () => { const v = await UI.prompt('Сколько хитов восстановить?', 5, { type: 'number', min: 0 }); if (v) { E.heal(o, v); refresh(); } } });
         items.push({ icon: '🧷', label: 'Состояния…', onClick: () => condDialog(o) });
+        items.push({ icon: '🛡️', label: 'Макс. хиты и КД…', onClick: () => editStatsDialog(o) });
         items.push({ sep: true });
         items.push({ icon: o.controller === 'ai' ? '🎮' : '🤖', label: o.controller === 'ai' ? 'Управление: передать игроку' : 'Управление: передать ИИ', onClick: () => { o.controller = o.controller === 'ai' ? 'human' : 'ai'; refresh(); if (cur() === o && o.controller === 'ai' && !ui.paused) turnLoop(); } });
         for (const s of Object.keys(R.SIDES)) if (s !== o.side) items.push({ icon: '🎨', label: 'Сторона: ' + R.SIDES[s].name, onClick: () => { o.side = s; if (o.kind !== 'pc') o.color = R.SIDES[s].color; refresh(); } });
@@ -1192,8 +1271,8 @@
             const inBattle = B.combatants.some((c) => c.refId === ch.id);
             list.appendChild(el('label', { class: 'list-item' },
               el('input', { type: 'checkbox', checked: chosen.has(ch.id), onchange: (e) => (e.target.checked ? chosen.add(ch.id) : chosen.delete(ch.id)) }),
-              el('span', { class: 'ico' }, s.race.icon),
-              el('div', { class: 'grow' }, el('div', {}, ch.name + (inBattle ? ' (уже в бою)' : '')), el('div', { class: 'muted', style: { fontSize: '12px' } }, s.cls.name + ' ' + s.level + ' · ❤️' + s.hp + ' · 🛡️' + s.ac + (ch.player ? ' · ' + ch.player : '')))));
+              el('span', { class: 'ico' }, UI.icon(s.cls.icon)),
+              el('div', { class: 'grow' }, el('div', {}, ch.name + (inBattle ? ' (уже в бою)' : '')), el('div', { class: 'muted', style: { fontSize: '12px' } }, (s.sub ? s.sub.name : s.race.name) + ' · ' + s.cls.name + ' ' + s.level + (s.sc ? ' (' + s.sc.name + ')' : '') + ' · ❤️' + s.hp + ' · 🛡️' + s.ac + (ch.player ? ' · ' + ch.player : '')))));
           }
         };
         draw();
@@ -1201,7 +1280,7 @@
           title: 'Добавить героев',
           body: el('div', {}, list),
           buttons: [
-            { label: '🎲 Создать готовую партию', onClick: () => { const pre = []; ['fighter', 'wizard', 'cleric', 'rogue'].forEach((id, i) => { const ch = D.Char.blank(); ch.cls = id; ch.race = ['dwarf', 'elf', 'human', 'halfling'][i]; ch.subrace = ['mountain', 'high', '', 'lightfoot'][i]; ch.name = ['Торгрим', 'Элариэль', 'Мирна', 'Шнырь'][i]; ch.level = 3; ch.color = ['#d9a43d', '#9b59b6', '#f1c40f', '#2bb3a6'][i]; D.Char.applyClassDefaults(ch); Store.saveCharacter(ch); pre.push(ch.id); }); pre.forEach((id) => chosen.add(id)); draw(); } },
+            { label: '🎲 Случайная партия', onClick: () => { const p = D.randomParty(); p.list.forEach((ch) => { Store.saveCharacter(ch); chosen.add(ch.id); }); draw(); UI.toast('Создана случайная партия ' + p.level + ' уровня'); } },
             { label: 'Отмена', value: null },
             { label: 'Добавить выбранных', cls: 'primary', value: true },
           ],
@@ -1212,6 +1291,8 @@
           const c = D.Char.toCombatant(ch, 'heroes');
           c.controller = 'human';
           addCombatant(c);
+          const comp = D.Char.makeCompanion(ch, c);
+          if (comp) addCombatant(comp);
         }
         refresh();
         void chars;
@@ -1226,7 +1307,7 @@
         const br = D.monsterBrowser({
           onPick: (m) => add(m),
           actions: (m) => el('div', { class: 'row wrap', style: { marginBottom: '12px', background: 'var(--panel2)', padding: '8px', borderRadius: '8px' } },
-            el('b', {}, m.icon + ' ' + m.name), el('span', { class: 'muted' }, 'Кол-во'), qty, side, ctrl,
+            el('b', { class: 'row' }, UI.icon(m.icon), m.name), el('span', { class: 'muted' }, 'Кол-во'), qty, side, ctrl,
             el('button', { class: 'primary', onclick: () => add(m) }, '+ Добавить на поле'), counter),
         });
         function add(m) {
@@ -1344,9 +1425,15 @@
         const fresh = D.Combat.newBattle(Store.map(B.map.id) || B.map, B.name);
         for (const c of B.combatants) {
           let n = null;
+          if (c.companionOf) continue;
           if (c.kind === 'pc') {
             const ch = Store.characters().find((x) => x.id === c.refId);
             if (ch) n = D.Char.toCombatant(ch, c.side);
+            const comp = ch && n && D.Char.makeCompanion(ch, n);
+            if (comp) {
+              comp.controller = c.controller;
+              fresh.combatants.push(comp);
+            }
           } else {
             const m = D.monster(c.refId);
             if (m) n = D.Combat.fromMonster(m, c.side, { rollHp: settings.rollMonsterHp, controller: c.controller });
@@ -1354,6 +1441,10 @@
           if (!n) continue;
           n.name = c.name;
           n.controller = c.controller;
+          if (c.customMaxHp) n.maxHp = n.hp = c.customMaxHp;
+          if (c.customAc) n.ac = c.customAc;
+          n.customMaxHp = c.customMaxHp;
+          n.customAc = c.customAc;
           n.x = c.x;
           n.y = c.y;
           fresh.combatants.push(n);

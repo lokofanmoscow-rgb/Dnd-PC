@@ -200,6 +200,74 @@ test('дикий облик друида', async () => {
   assert.strictEqual(dr.hp, origHp - 3);
 });
 
+test('своё снаряжение: доспех, оружие, артефакт', () => {
+  D.EQUIP.saveCustom('armor', { id: 'carm_test', name: 'Тестовые латы', cat: 'heavy', base: 19, dexMax: 0, str: 0, magic: 1, custom: true });
+  D.EQUIP.saveCustom('weapons', { id: 'cwpn_test', name: 'Тестовый клинок', cat: 'martial', kind: 'melee', dmg: '2d6', type: 'slashing', props: {}, magic: 1, extra: { dice: '1d6', type: 'fire' }, custom: true });
+  D.EQUIP.saveCustom('items', { id: 'citem_test', name: 'Тестовый амулет', icon: 'gem-pendant', mods: { ac: 1, hp: 5, resist: ['fire'] }, custom: true });
+  const ch = makeHero('fighter', 'human', 5);
+  const before = D.Char.compute(ch);
+  ch.armor = 'carm_test';
+  ch.shield = false;
+  ch.weapons = [{ id: 'cwpn_test', magic: 0 }];
+  ch.artifacts = ['citem_test', 'ringprotection', ''];
+  const s = D.Char.compute(ch);
+  // 19 + 1 (магия) + 1 (стиль «Защита») + 1 (амулет) + 1 (кольцо)
+  assert.strictEqual(s.ac, 23);
+  assert.strictEqual(s.hp, before.hp + 5);
+  assert.ok(s.resist.includes('fire'));
+  const atk = s.attacks.find((a) => a.weaponId === 'cwpn_test');
+  assert.ok(atk && atk.dmg.length === 2 && atk.dmg[1].type === 'fire');
+  assert.strictEqual(atk.toHit, s.mods.str + s.prof + 1);
+});
+
+test('изгнание и возвращение при потере концентрации', async () => {
+  const map = D.PRESET_MAPS.find((m) => m.id === 'preset_field');
+  const B = D.Combat.newBattle(map);
+  const wiz = D.Char.toCombatant(makeHero('wizard', 'human', 9, { spells: ['firebolt', 'banishment'] }), 'heroes');
+  wiz.x = 2;
+  wiz.y = 2;
+  const ogre = D.Combat.fromMonster(D.monster('ogre'), 'enemies');
+  ogre.x = 6;
+  ogre.y = 2;
+  const ogre2 = D.Combat.fromMonster(D.monster('ogre'), 'enemies');
+  ogre2.x = 6;
+  ogre2.y = 5;
+  B.combatants.push(wiz, ogre, ogre2);
+  const E = new D.Combat.Engine(B, {});
+  wiz.initiative = 30;
+  ogre.initiative = 1;
+  ogre2.initiative = 1;
+  await E.beginCombat();
+  ogre.saves.cha = -50;
+  const r = await E.castSpell(wiz, 'banishment', 4, { targets: [ogre.uid] });
+  assert.ok(r.ok, r.reason);
+  assert.ok(ogre.banished && ogre.x === -1);
+  assert.strictEqual(B.phase, 'combat');
+  E.endConcentration(wiz, 'тест');
+  assert.ok(!ogre.banished && ogre.x >= 0);
+});
+
+test('врождённые заклинания монстров без ячеек', async () => {
+  const withInnate = D.MONSTERS.find((m) => m.spellcasting && Object.keys(m.spellcasting.innate || {}).some((en) => D.spellByEn(en) && D.spellByEn(en).level > 0));
+  assert.ok(withInnate, 'нет монстров с врождёнными заклинаниями');
+  const c = D.Combat.fromMonster(withInnate, 'enemies');
+  const id = Object.keys(c.spellcasting.innate).find((k) => D.spell(k).level > 0);
+  const map = D.PRESET_MAPS.find((m) => m.id === 'preset_field');
+  const B = D.Combat.newBattle(map);
+  c.x = 2;
+  c.y = 2;
+  const h = D.Char.toCombatant(makeHero('fighter', 'human', 5), 'heroes');
+  h.x = 4;
+  h.y = 2;
+  B.combatants.push(c, h);
+  const E = new D.Combat.Engine(B, {});
+  c.initiative = 30;
+  h.initiative = 1;
+  await E.beginCombat();
+  for (const k in c.spellcasting.slots) c.spellcasting.slots[k].used = c.spellcasting.slots[k].max;
+  assert.ok(E.usesInnate(c, D.spell(id), 0));
+});
+
 test('заклинания игроков применяются', async () => {
   D.Dice.setRng(seeded(5));
   const map = D.PRESET_MAPS.find((m) => m.id === 'preset_field');

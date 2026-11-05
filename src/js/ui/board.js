@@ -2,6 +2,12 @@
 (function (root) {
   'use strict';
   const D = (root.DND = root.DND || {});
+  const PATHS = {};
+  function iconPath(key) {
+    if (!key || !D.ICONS || !D.ICONS[key] || typeof Path2D === 'undefined') return null;
+    return PATHS[key] || (PATHS[key] = new Path2D(D.ICONS[key]));
+  }
+  D.iconPath = iconPath;
   const U = D.U;
 
   const BASE = 48;
@@ -544,7 +550,7 @@
 
   BP._buildCache = function () {
     const m = this.map;
-    const cs = m.w * m.h > 2500 ? 32 : BASE;
+    const cs = m.w * m.h > 6400 ? 24 : m.w * m.h > 2500 ? 32 : BASE;
     this.cacheCs = cs;
     const cv = document.createElement('canvas');
     cv.width = m.w * cs;
@@ -593,7 +599,7 @@
     const w = r.width || 800;
     const h = r.height || 600;
     const z = Math.min((w - 40) / (this.map.w * BASE), (h - 40) / (this.map.h * BASE));
-    this.zoom = U.clamp(z, 0.25, 2.5);
+    this.zoom = U.clamp(z, 0.08, 2.5);
     const s = this.cellPx();
     this.ox = (w - this.map.w * s) / 2;
     this.oy = (h - this.map.h * s) / 2;
@@ -601,7 +607,7 @@
 
   BP.zoomAt = function (sx, sy, factor) {
     const before = this.toCell(sx, sy);
-    this.zoom = U.clamp(this.zoom * factor, 0.25, 3);
+    this.zoom = U.clamp(this.zoom * factor, 0.08, 3);
     const s = this.cellPx();
     this.ox = sx - before.x * s;
     this.oy = sy - before.y * s;
@@ -913,6 +919,24 @@
       if (c.dead || down) ctx.filter = 'grayscale(1)';
       ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
       ctx.restore();
+    } else if (iconPath(c.icon)) {
+      const g = ctx.createRadialGradient(cx, cy - r * 0.35, r * 0.1, cx, cy, r);
+      g.addColorStop(0, '#3b3027');
+      g.addColorStop(1, '#120e0b');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.save();
+      const k = (r * 1.42) / 512;
+      ctx.translate(cx - 256 * k, cy - 256 * k);
+      ctx.scale(k, k);
+      ctx.shadowColor = 'rgba(0,0,0,0.85)';
+      ctx.shadowBlur = Math.max(2, r * 0.12);
+      ctx.shadowOffsetY = Math.max(1, r * 0.04);
+      ctx.fillStyle = c.dead || down ? '#7d7770' : c.side === 'enemies' ? '#f0d9c2' : '#efe6d2';
+      ctx.fill(iconPath(c.icon));
+      ctx.restore();
     } else {
       ctx.font = Math.round(r * 1.15) + 'px ' + "'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif";
       ctx.textAlign = 'center';
@@ -984,7 +1008,7 @@
     }
     for (const e of c.effects) {
       const d = D.R.EFFECTS[e.id];
-      if (d && ['rage', 'dodge', 'bless', 'hex', 'hunterMark', 'shieldOfFaith', 'guidingBolt', 'spiritGuardians'].includes(e.id) && !icons.includes(d.icon)) icons.push(d.icon);
+      if (d && ['rage', 'dodge', 'bless', 'hex', 'hunterMark', 'shieldOfFaith', 'guidingBolt', 'spiritGuardians', 'haste', 'slowSpell', 'faerieFire', 'heroism', 'holyNimbus', 'vowOfEnmity'].includes(e.id) && !icons.includes(d.icon)) icons.push(d.icon);
     }
     if (c.concentration) icons.push('🧠');
     if (icons.length && size >= 20) {

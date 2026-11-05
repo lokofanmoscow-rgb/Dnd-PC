@@ -844,8 +844,8 @@
   P.checkEnd = async function () {
     const B = this.B;
     if (B.phase !== 'combat' || !B.hadSides) return false;
-    const enemiesLeft = B.combatants.some((c) => c.side === 'enemies' && !c.dead && c.x >= 0 && (c.hp > 0 || c.down));
-    const heroesLeft = B.combatants.some((c) => c.side !== 'enemies' && !c.dead && c.x >= 0 && c.hp > 0);
+    const enemiesLeft = B.combatants.some((c) => c.side === 'enemies' && !c.dead && (c.x >= 0 || c.banished) && (c.hp > 0 || c.down));
+    const heroesLeft = B.combatants.some((c) => c.side !== 'enemies' && !c.dead && (c.x >= 0 || c.banished) && c.hp > 0);
     if (B.hadSides.enemies && !enemiesLeft) {
       B.phase = 'ended';
       B.result = 'victory';

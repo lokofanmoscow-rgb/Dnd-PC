@@ -27,7 +27,7 @@
       let rectStart = null;
 
       const nameInp = el('input', { value: map.name, style: { width: '240px' }, oninput: () => { map.name = nameInp.value; dirty = true; } });
-      const sizeLbl = el('span', { class: 'muted' });
+      const sizeLbl = el('span', { class: 'muted', style: { whiteSpace: 'nowrap' } });
       const status = el('span', { class: 'muted' });
       const wrap = el('div', { class: 'board-wrap' });
       const hint = el('div', { class: 'board-hint' }, 'ЛКМ — рисовать · ПКМ/СКМ — сдвиг · колесо — масштаб · Ctrl+Z — отмена');
@@ -245,8 +245,8 @@
       }
       async function newDialog() {
         if (!(await confirmDiscard())) return;
-        const w = el('input', { type: 'number', value: 24, min: 6, max: 60 });
-        const h = el('input', { type: 'number', value: 16, min: 6, max: 60 });
+        const w = el('input', { type: 'number', value: 24, min: 6, max: 120 });
+        const h = el('input', { type: 'number', value: 16, min: 6, max: 120 });
         const fill = U.select(Object.keys(D.TILES).filter((k) => D.TILES[k].walk).map((k) => ({ value: k, label: D.TILES[k].name })), 'floor');
         const border = el('input', { type: 'checkbox', checked: true });
         const r = await UI.modal({
@@ -255,15 +255,15 @@
           buttons: [{ label: 'Отмена', value: null }, { label: 'Создать', cls: 'primary', value: true }],
         }).promise;
         if (!r) return;
-        const W = U.clamp(Number(w.value) || 24, 6, 60);
-        const H = U.clamp(Number(h.value) || 16, 6, 60);
+        const W = U.clamp(Number(w.value) || 24, 6, 120);
+        const H = U.clamp(Number(h.value) || 16, 6, 120);
         const m = newMap(W, H, fill.value);
         if (border.checked) for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (x === 0 || y === 0 || x === W - 1 || y === H - 1) m.cells[y * W + x] = 'wall';
         load(m);
       }
       async function resizeDialog() {
-        const w = el('input', { type: 'number', value: map.w, min: 6, max: 60 });
-        const h = el('input', { type: 'number', value: map.h, min: 6, max: 60 });
+        const w = el('input', { type: 'number', value: map.w, min: 6, max: 120 });
+        const h = el('input', { type: 'number', value: map.h, min: 6, max: 120 });
         const r = await UI.modal({
           title: 'Изменить размер',
           body: el('div', { class: 'form-grid' }, el('label', {}, 'Ширина'), w, el('label', {}, 'Высота'), h),
@@ -271,8 +271,8 @@
         }).promise;
         if (!r) return;
         pushUndo();
-        const W = U.clamp(Number(w.value) || map.w, 6, 60);
-        const H = U.clamp(Number(h.value) || map.h, 6, 60);
+        const W = U.clamp(Number(w.value) || map.w, 6, 120);
+        const H = U.clamp(Number(h.value) || map.h, 6, 120);
         const cells = new Array(W * H).fill('floor');
         for (let y = 0; y < Math.min(H, map.h); y++) for (let x = 0; x < Math.min(W, map.w); x++) cells[y * W + x] = map.cells[y * map.w + x];
         map.w = W;

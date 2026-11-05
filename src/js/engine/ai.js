@@ -96,8 +96,10 @@
   AI.bestCellFor = function (E, c, M, tgt, reachFt, needLOS, keepAway) {
     let best = null;
     for (const rec of M.values()) {
-      if (!G.canEndAt(E.B, c, rec.x, rec.y) && !(rec.x === c.x && rec.y === c.y)) continue;
+      if (best && rec.cost >= best.score) continue;
       const d = G.distFtAt(c, rec.x, rec.y, tgt);
+      if (d > reachFt) continue;
+      if (!G.canEndAt(E.B, c, rec.x, rec.y) && !(rec.x === c.x && rec.y === c.y)) continue;
       if (d > reachFt) continue;
       if (needLOS && !G.hasLOS(E.B.map, { x: rec.x, y: rec.y, cells: c.cells }, tgt)) continue;
       let score = rec.cost;
