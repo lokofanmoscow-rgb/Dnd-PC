@@ -2991,7 +2991,8 @@
     const moon = !!(c.flags && c.flags.circleForms);
     const maxCR = moon ? (lv >= 6 ? Math.floor(lv / 3) : 1) : lv >= 8 ? 1 : lv >= 4 ? 0.5 : 0.25;
     const list = (D.MONSTERS || []).filter((m) => m.type === 'beast' && !m.swarm && R.crValue(m.cr) <= maxCR && (lv >= 8 || !m.speed.fly) && (lv >= 4 || !m.speed.swim || m.speed.walk >= 20));
-    list.sort((a, b) => R.crValue(b.cr) - R.crValue(a.cr) || b.hp - a.hp);
+    const land = (m) => ((m.speed.walk || 0) >= 30 || (lv >= 8 && m.speed.fly) ? 1 : 0);
+    list.sort((a, b) => R.crValue(b.cr) - R.crValue(a.cr) || land(b) - land(a) || b.hp - a.hp);
     return list.slice(0, 14);
   };
 
