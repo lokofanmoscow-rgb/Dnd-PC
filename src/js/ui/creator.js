@@ -57,9 +57,9 @@
       const bonus = Char.bonusSpells(ch);
       for (const id of s.spells) {
         const sp = D.spell(id);
-        (byLevel[sp.level] = byLevel[sp.level] || []).push(sp.name + (bonus.includes(id) ? ' ★' : '') + (sc.innate && sc.innate[id] != null ? ' (арканум)' : ''));
+        (byLevel[sp.level] = byLevel[sp.level] || []).push(el('span', { class: 'sp-name', title: sp.desc + (sp.info ? '\n\n' + D.spellInfoLine(sp) : '') }, sp.name + (bonus.includes(id) ? ' ★' : '') + (sc.innate && sc.innate[id] != null ? ' (арканум)' : '')));
       }
-      for (const lv of Object.keys(byLevel).sort()) sheet.appendChild(el('div', { class: 'feat' }, el('b', {}, lv === '0' ? 'Заговоры: ' : lv + ' уровень: '), byLevel[lv].join(', ')));
+      for (const lv of Object.keys(byLevel).sort()) sheet.appendChild(el('div', { class: 'feat' }, el('b', {}, lv === '0' ? 'Заговоры: ' : lv + ' уровень: '), byLevel[lv].map((x, i) => [i ? ', ' : '', x])));
       if (bonus.length) sheet.appendChild(el('div', { class: 'muted', style: { fontSize: '11px' } }, '★ — всегда подготовлены (' + (s.sc ? s.sc.name : 'подкласс') + ')'));
     }
     const res = s.res || {};
@@ -322,9 +322,14 @@
       const lim = Char.spellLimits(ch);
       const all = Char.spellList(ch);
       const bonus = Char.bonusSpells(ch);
-      const c0 = shuffle(all.filter((s) => s.level === 0)).slice(0, lim.cantrips);
+      const combat = (s) => (s.kind !== 'utility' && s.cast !== 'long' ? 1 : 0);
+      const c0 = shuffle(all.filter((s) => s.level === 0)).sort((a, b) => combat(b) - combat(a)).slice(0, lim.cantrips);
       const maxL = D.maxSpellLevel(cls, level, ch.subclass);
-      const lv = shuffle(all.filter((s) => s.level > 0 && !bonus.includes(s.id))).sort((a, b) => (b.level >= maxL - 1 ? 1 : 0) - (a.level >= maxL - 1 ? 1 : 0)).slice(0, lim.spells);
+      const pool = shuffle(all.filter((s) => s.level > 0 && !bonus.includes(s.id)));
+      const nUtil = Math.floor(lim.spells / 4);
+      const util = pool.filter((s) => !combat(s)).slice(0, nUtil);
+      const fight = pool.filter((s) => combat(s)).sort((a, b) => (b.level >= maxL - 1 ? 1 : 0) - (a.level >= maxL - 1 ? 1 : 0));
+      const lv = fight.slice(0, lim.spells - util.length).concat(util).slice(0, lim.spells);
       ch.spells = c0.concat(lv).map((s) => s.id);
     }
     // Магическое снаряжение на высоких уровнях
@@ -419,6 +424,7 @@
       const ch = params.ch ? Object.assign(Char.blank(), U.deepClone(params.ch)) : Char.blank();
       if (!ch.asi) ch.asi = { str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0 };
       const back = params.back || 'roster';
+      const ui = {};
       const form = el('div', { class: 'creator-form' });
       const sheetBox = el('div', { class: 'creator-sheet' });
 
@@ -669,15 +675,35 @@
           const nS = avail.filter((x) => x.level > 0 && chosen.has(x.id)).length;
           form.appendChild(el('div', { class: 'section-title' }, 'Заклинания — заговоры ' + nC + '/' + lim.cantrips + ', заклинания ' + nS + '/' + lim.spells + ' (макс. ' + maxL + ' уровень)'));
           if (bonus.length) form.appendChild(el('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '4px' } }, 'Всегда подготовлены (' + (scObj ? scObj.name : '') + '): ' + bonus.map((id) => D.spell(id).name).join(', ')));
-          const sgr = el('div', { class: 'check-grid' });
-          for (const sp of avail) {
-            const isC = sp.level === 0;
-            const checked = chosen.has(sp.id);
-            const full = isC ? nC >= lim.cantrips : nS >= lim.spells;
-            sgr.appendChild(el('label', { title: sp.desc, class: !checked && full ? 'disabled' : '' },
-              el('input', { type: 'checkbox', checked, disabled: !checked && full, onchange: (e) => { if (e.target.checked) ch.spells.push(sp.id); else ch.spells = ch.spells.filter((x) => x !== sp.id); rerender(); } }),
-              el('span', {}, sp.name), el('span', { class: 'spell-tag' }, isC ? 'заговор' : sp.level + ' ур.'), sp.concentration ? el('span', { class: 'spell-tag', title: 'Концентрация' }, 'К') : null));
-          }
+          const sorted = avail.slice().sort((a, b) => a.level - b.level || a.name.localeCompare(b.name, 'ru'));
+          const q = ui.spellFilter || '';
+          const filterInp = el('input', { placeholder: '🔍 Поиск заклинания', value: q, style: { width: '260px', marginBottom: '6px' }, oninput: (e) => { ui.spellFilter = e.target.value; drawSpells(); } });
+          const onlyCombat = el('input', { type: 'checkbox', checked: !!ui.onlyCombat, onchange: (e) => { ui.onlyCombat = e.target.checked; drawSpells(); } });
+          form.appendChild(el('div', { class: 'row' }, filterInp, el('label', { class: 'row', style: { fontSize: '12px' } }, onlyCombat, 'только боевые'), el('span', { class: 'muted', style: { fontSize: '12px' } }, 'доступно: ' + avail.length)));
+          const sgr = el('div', { class: 'check-grid spell-grid' });
+          const drawSpells = () => {
+            U.clear(sgr);
+            const f = (ui.spellFilter || '').toLowerCase();
+            let lastLv = -1;
+            for (const sp of sorted) {
+              if (f && !sp.name.toLowerCase().includes(f) && !(sp.en || '').toLowerCase().includes(f)) continue;
+              if (ui.onlyCombat && (sp.kind === 'utility' || sp.cast === 'long') && !chosen.has(sp.id)) continue;
+              if (sp.level !== lastLv) {
+                lastLv = sp.level;
+                sgr.appendChild(el('div', { class: 'spell-lv' }, sp.level === 0 ? 'Заговоры' : sp.level + ' уровень'));
+              }
+              const isC = sp.level === 0;
+              const checked = chosen.has(sp.id);
+              const full = isC ? nC >= lim.cantrips : nS >= lim.spells;
+              sgr.appendChild(el('label', { title: sp.desc + (sp.info ? '\n\n' + D.spellInfoLine(sp) : ''), class: !checked && full ? 'disabled' : '' },
+                el('input', { type: 'checkbox', checked, disabled: !checked && full, onchange: (e) => { if (e.target.checked) ch.spells.push(sp.id); else ch.spells = ch.spells.filter((x) => x !== sp.id); rerender(); } }),
+                el('span', {}, sp.name),
+                sp.concentration ? el('span', { class: 'spell-tag', title: 'Концентрация' }, 'К') : null,
+                sp.ritual ? el('span', { class: 'spell-tag', title: 'Ритуал' }, 'Р') : null,
+                sp.kind === 'utility' || sp.cast === 'long' ? el('span', { class: 'spell-tag muted', title: sp.cast === 'long' ? 'Накладывается вне боя: ' + sp.castTime : 'Описательное — эффект разыгрывает ведущий' }, sp.cast === 'long' ? '⌛' : 'ℹ') : null));
+            }
+          };
+          drawSpells();
           form.appendChild(sgr);
           form.appendChild(el('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px' } }, 'Наведите на заклинание, чтобы увидеть описание.' + (cs.type === 'pact' && ch.level >= 11 ? ' Заклинания 6–9 уровня колдуна (таинственный арканум) — по разу за бой без ячейки.' : '')));
         } else if (sub && sub.cantrip) {

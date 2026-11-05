@@ -157,6 +157,8 @@
   };
 
   P.hasCond = (c, id) => c.conditions.some((x) => x.id === id);
+  P.effAny = (c, key) => c.effects.some((e) => !!e[key]);
+  P.effSum = (c, key) => c.effects.reduce((a, e) => a + (typeof e[key] === 'number' ? e[key] : 0), 0);
   P.hasEff = (c, id) => c.effects.some((x) => x.id === id);
   P.getEff = (c, id) => c.effects.find((x) => x.id === id);
   P.incap = function (c) {
@@ -173,7 +175,7 @@
   P.addCond = function (c, id, opts) {
     opts = opts || {};
     if (c.dead) return false;
-    if (c.condImmune.includes(id)) {
+    if (c.condImmune.includes(id) || c.effects.some((e) => e.condImmune && e.condImmune.includes(id))) {
       this.log(this.name(c) + ' невосприимчив к состоянию «' + R.CONDITIONS[id].name + '».', 'muted');
       return false;
     }
@@ -223,15 +225,16 @@
   P.speedOf = function (c) {
     if (c.dead || c.hp <= 0 || c.banished) return 0;
     if (this.hasCond(c, 'grappled') || this.hasCond(c, 'restrained') || this.hasCond(c, 'paralyzed') || this.hasCond(c, 'stunned') || this.hasCond(c, 'petrified')) return 0;
-    let s = c.speed.walk || 0;
-    if (c.speed.fly && !this.hasCond(c, 'prone')) s = Math.max(s, c.speed.fly);
+    let s = (c.speed.walk || 0) + this.effSum(c, 'speedBonus');
+    const magicFly = c.effects.find((e) => e.fly);
+    if ((c.speed.fly || magicFly) && !this.hasCond(c, 'prone')) s = Math.max(s, c.speed.fly || 0, magicFly ? magicFly.fly : 0);
     if (this.hasEff(c, 'slowed')) s -= 10;
     if (this.hasEff(c, 'haste')) s *= 2;
     if (this.hasEff(c, 'slowSpell')) s = Math.floor(s / 2 / 5) * 5;
     return Math.max(0, s);
   };
   P.canFly = function (c) {
-    return !!c.speed.fly && !this.hasCond(c, 'prone');
+    return (!!c.speed.fly || this.effAny(c, 'fly')) && !this.hasCond(c, 'prone');
   };
 
   P.acOf = function (c) {
@@ -242,6 +245,7 @@
     if (this.hasEff(c, 'shield')) ac += 5;
     if (this.hasEff(c, 'haste')) ac += 2;
     if (this.hasEff(c, 'slowSpell')) ac -= 2;
+    ac += this.effSum(c, 'ac');
     const ss = c.effects.find((e) => e.id === 'shimmerShield');
     if (ss) ac += ss.value || 2;
     return ac;
@@ -297,7 +301,13 @@
       o.conditions = o.conditions.filter((x) => x.conc !== key);
       o.effects = o.effects.filter((x) => x.conc !== key);
       if (o.banished && o.banished.conc === key) this.unbanish(o);
+      if (o.beast && o.beast.conc === key) {
+        this.revertWildShape(o, true);
+        this.log(this.name(o) + ' принимает прежний облик.', 'spell');
+      }
     }
+    if (this.B.zones) this.B.zones = this.B.zones.filter((z) => z.conc !== key);
+    for (const o of this.B.combatants.slice()) if (o.summonConc === key) this.removeSummon(o);
     this.log(this.name(c) + ' теряет концентрацию на «' + nm + '»' + (reason ? ' (' + reason + ')' : '') + '.', 'warn');
     this.h.changed();
   };
@@ -383,18 +393,26 @@
     if (opts.cond && f.twoHeads && ['blinded', 'charmed', 'deafened', 'frightened', 'stunned', 'unconscious'].includes(opts.cond)) adv.push('несколько голов');
     if ((opts.cond === 'frightened' || opts.cond === 'charmed') && this.auraNear(c, 'countercharm')) adv.push('контрочарование');
     if (ab === 'dex' && this.hasCond(c, 'restrained')) dis.push('опутан');
+    if (c.effects.some((e) => e.saveAdv === true || (Array.isArray(e.saveAdv) && e.saveAdv.includes(ab)))) adv.push('магия');
     const mode = adv.length && !dis.length ? 1 : dis.length && !adv.length ? -1 : 0;
     let roll = Dice.d20(mode, f.lucky);
-    let bonus = c.saves[ab];
+    let bonus = c.saves[ab] + this.effSum(c, 'saveBonus');
+    let magicMod = 0;
+    const sdie = c.effects.find((e) => e.saveDie);
+    if (sdie) {
+      magicMod += Dice.roll(sdie.saveDie).total;
+      if (sdie.once) c.effects = c.effects.filter((x) => x !== sdie);
+    }
+    for (const e of c.effects) if (e.savePenaltyDie) magicMod -= Dice.roll(e.savePenaltyDie).total;
     if (ab === 'dex' && this.hasEff(c, 'slowSpell')) bonus -= 2;
     const bless = this.blessBonus(c);
     const aura = this.auraOfProtection(c);
     bonus += aura;
-    let total = roll.value + bonus + bless;
+    let total = roll.value + bonus + bless + magicMod;
     total += await this.useInspiration(c, total, dc);
     let ok = total >= dc;
     await this.h.roll({ kind: 'save', actor: c, label: 'Спасбросок ' + abName, d20: roll, bonus: bonus + bless, total, vs: dc, ok });
-    let extra = (bless ? ' (благословение +' + bless + ')' : '') + (aura ? ' (аура +' + aura + ')' : '') + (mode > 0 ? ' [преимущество]' : mode < 0 ? ' [помеха]' : '');
+    let extra = (bless ? ' (благословение +' + bless + ')' : '') + (aura ? ' (аура +' + aura + ')' : '') + (magicMod ? ' (магия ' + U.fmtMod(magicMod) + ')' : '') + (mode > 0 ? ' [преимущество]' : mode < 0 ? ' [помеха]' : '');
     if (!ok && c.res && c.res.darkLuck && c.res.darkLuck.used < c.res.darkLuck.max && total + 10 >= dc) {
       const use = await this.askReactor(c, c.name + ' провалил спасбросок (' + total + ' против Сл ' + dc + '). Использовать Удачу Тёмного (+1к10)?', [
         { label: '+1к10', value: true }, { label: 'Нет', value: false }], true);
@@ -616,6 +634,26 @@
       }
     }
 
+    // Зоны заклинаний
+    if (B.zones && B.zones.length) {
+      for (const z of B.zones.slice()) {
+        if (z.owner === c.uid) {
+          z.rounds--;
+          if (z.rounds <= 0) {
+            B.zones = B.zones.filter((x) => x !== z);
+            this.log('Действие «' + z.name + '» закончилось.', 'muted');
+            continue;
+          }
+        }
+        if (c.dead || c.hp <= 0 || c.x < 0 || z.visual) continue;
+        await this.zoneTrigger(z, c);
+      }
+      if (c.dead) {
+        await this.checkEnd();
+        return this.nextTurn();
+      }
+    }
+
     // Опасная местность в начале хода
     await this.hazardAt(c, 'start');
     if (c.dead) {
@@ -630,9 +668,30 @@
       this.log(this.name(c) + ' атакует безрассудно.', 'muted');
     }
     if (this.hasEff(c, 'haste')) B.turn.flags.hasteAction = true;
+    if (c.effects.some((e) => e.confused) && c.hp > 0 && !this.incap(c)) {
+      const r = Dice.die(10);
+      if (r === 1) {
+        this.log(this.name(c) + ' в смятении бесцельно бродит и теряет действие (к10 = 1).', 'bad');
+        B.turn.actions = 0;
+        B.turn.bonus = false;
+      } else if (r <= 6) {
+        this.log(this.name(c) + ' в смятении не может ни двигаться, ни действовать (к10 = ' + r + ').', 'bad');
+        B.turn.actions = 0;
+        B.turn.bonus = false;
+        B.turn.noMove = true;
+      } else if (r <= 8) {
+        this.log(this.name(c) + ' в смятении бьёт ближайшего (к10 = ' + r + ').', 'bad');
+        const near = B.combatants.filter((o) => o !== c && !o.dead && o.x >= 0 && G.distFt(c, o) <= 5);
+        const atk = this.bestMelee(c, 5);
+        if (near.length && atk) await this.attack(c, atk, near[Math.floor(Math.random() * near.length)], {});
+        B.turn.actions = 0;
+        B.turn.bonus = false;
+        B.turn.noMove = true;
+      } else this.log(this.name(c) + ' преодолевает смятение в этот ход (к10 = ' + r + ').', 'muted');
+    }
     c.acted = true;
     c.dispOff = false;
-    B.turn.move = this.speedOf(c);
+    B.turn.move = B.turn.noMove ? 0 : this.speedOf(c);
     this.h.changed();
   };
 
@@ -679,6 +738,10 @@
     if (!c) return;
     // Длительный урон (кислотная стрела и т. п.)
     for (const e of c.effects.slice()) {
+      if (e.dot && e.linkCond && !this.hasCond(c, e.linkCond)) {
+        c.effects = c.effects.filter((x) => x !== e);
+        continue;
+      }
       if (e.dot && !c.dead) {
         const r = Dice.roll(e.dot.dice);
         this.log(this.name(c) + ': ' + ((R.EFFECTS[e.id] || {}).name || 'эффект') + '.', 'bad');
@@ -721,6 +784,12 @@
     if (this.hasEff(c, 'entropicMark')) c.effects = c.effects.filter((e) => e.id !== 'entropicMark');
     this.h.changed();
     if (await this.checkEnd()) return;
+    if (c.timeStop > 0 && !c.dead && c.hp > 0) {
+      c.timeStop--;
+      this.log('⏳ Время всё ещё стоит — ' + this.name(c) + ' ходит снова.', 'spell');
+      await this.startTurn();
+      return;
+    }
     await this.legendaryPhase(c);
     if (await this.checkEnd()) return;
     await this.nextTurn();
@@ -932,7 +1001,7 @@
         segs.push(a + ' ' + R.DAMAGE_SHORT[p.type] + ' (поглощение)');
         continue;
       }
-      if (tgt.immune.includes(p.type) || (nonmag && tgt.immuneNonmagical)) {
+      if (tgt.immune.includes(p.type) || (nonmag && tgt.immuneNonmagical) || tgt.effects.some((e) => e.immune && e.immune.includes(p.type))) {
         a = 0;
         note = 'иммунитет';
       } else {
@@ -941,6 +1010,7 @@
         if (phys && raging) res = true;
         if (raging && f.totem === 'bear' && p.type !== 'psychic') res = true;
         if (opts.spell && (f.spellResistance || f.resistSpells || this.auraNear(tgt, 'auraOfWarding'))) res = true;
+        if (tgt.effects.some((e) => e.resistAll || (e.resist && e.resist.includes(p.type)))) res = true;
         if (res) {
           a = Math.floor(a / 2);
           note = 'сопротивление';
@@ -981,6 +1051,10 @@
     if (opts.noKill && dmg >= tgt.hp && tgt.hp > 0) dmg = Math.max(0, tgt.hp - 1);
     this.h.float(tgt, '-' + total, '#ff6b5b');
     if (this.removeCond(tgt, 'unconscious', (x) => x.tag === 'sleep')) this.log(this.name(tgt) + ' просыпается от боли.', 'muted');
+    if (tgt.conditions.some((x) => x.fragile)) {
+      tgt.conditions = tgt.conditions.filter((x) => !x.fragile);
+      this.log(this.name(tgt) + ' приходит в себя от боли.', 'muted');
+    }
     this.removeCond(tgt, 'frightened', (x) => x.tag === 'turned');
 
     const before = tgt.hp;
@@ -1042,6 +1116,13 @@
           this.log(this.name(tgt) + ' не падает — Непреклонная ярость!', 'good');
         }
       }
+      const dward = tgt.effects.find((e) => e.deathWard);
+      if (!saved && dward) {
+        tgt.effects = tgt.effects.filter((e) => e !== dward);
+        tgt.hp = 1;
+        saved = true;
+        this.log(this.name(tgt) + ' остаётся с 1 хитом (Защита от смерти).', 'good');
+      }
       if (!saved && tgt.res && tgt.res.undying && tgt.res.undying.used < 1 && overflow < tgt.maxHp) {
         tgt.res.undying.used++;
         tgt.hp = 1;
@@ -1072,6 +1153,12 @@
     if (src && src !== tgt && !src.dead && this.hostile(tgt, src) && opts.fromAttack !== false) {
       const near = G.distFt(tgt, src) <= 5;
       // Раскалённое тело
+      const fsh = tgt.effects.find((e) => e.retaliate);
+      if (fsh && opts.melee && near && !tgt.dead) {
+        const r = Dice.roll(fsh.retaliate.dice);
+        this.log(this.name(src) + ' обжигается об огненный щит ' + this.name(tgt) + '.', 'bad');
+        await this.applyDamage(src, [{ amount: r.total, type: fsh.retaliate.type }], tgt, { fromAttack: false, magical: true });
+      }
       if (f.heatedBody && opts.melee && near && !tgt.dead) {
         const r = Dice.roll(f.heatedBody.dice);
         this.log(this.name(src) + ' обжигается о ' + this.name(tgt) + '.', 'bad');
@@ -1183,8 +1270,10 @@
       if (dist <= 5) adv.push('цель лежит рядом');
       else dis.push('цель лежит далеко');
     }
-    if (this.hasCond(att, 'invisible')) adv.push('атакующий невидим');
-    if (this.hasCond(tgt, 'invisible')) dis.push('цель невидима');
+    if (this.hasCond(att, 'invisible') && !this.effAny(tgt, 'seeInvisible')) adv.push('атакующий невидим');
+    if (this.hasCond(tgt, 'invisible') && !this.effAny(att, 'seeInvisible')) dis.push('цель невидима');
+    if (att.effects.some((e) => e.attackAdv || e.attackAdvOnce)) adv.push('магия');
+    if (tgt.effects.some((e) => e.attackersDis === true || (Array.isArray(e.attackersDis) && e.attackersDis.includes(att.type)))) dis.push('защитная магия');
     if (this.hasEff(tgt, 'reckless')) adv.push('безрассудство цели');
     if (this.hasEff(tgt, 'guidingBolt')) adv.push('направленный снаряд');
     if (this.hasEff(tgt, 'faerieFire')) adv.push('огонь фей');
@@ -1285,6 +1374,31 @@
     if (helped) tgt.effects = tgt.effects.filter((e) => e !== helped);
     if (this.hasEff(att, 'mockery')) this.removeEff(att, 'mockery');
     if (this.hasEff(att, 'tides')) this.removeEff(att, 'tides');
+    att.effects = att.effects.filter((e) => !e.attackAdvOnce);
+    // Убежище: атакующий должен преуспеть в спасброске Мудрости
+    const sanct = tgt.effects.find((e) => e.sanctuary);
+    if (sanct && this.hostile(att, tgt)) {
+      const caster = this.get(sanct.src);
+      const sv = await this.save(att, 'wis', (caster && caster.spellcasting && caster.spellcasting.dc) || 13, { magic: true });
+      if (!sv.ok) {
+        this.log(this.name(att) + ' не решается атаковать ' + this.name(tgt) + ' (Убежище).', 'muted');
+        return { ok: true, hit: false, sanctuary: true };
+      }
+    }
+    if (this.hostile(att, tgt)) att.effects = att.effects.filter((e) => !e.sanctuary);
+    // Отражения: атака может попасть в иллюзорного двойника
+    const mi = tgt.effects.find((e) => e.mirror > 0);
+    if (mi && this.hostile(att, tgt) && !this.effAny(att, 'seeInvisible')) {
+      const need = mi.mirror >= 3 ? 6 : mi.mirror === 2 ? 8 : 11;
+      const r = Dice.die(20);
+      if (r >= need) {
+        mi.mirror--;
+        this.log(this.name(att) + ' атакует иллюзорного двойника ' + this.name(tgt) + ' (к20 = ' + r + ') — двойник исчезает. Осталось: ' + mi.mirror + '.', 'spell');
+        if (mi.mirror <= 0) tgt.effects = tgt.effects.filter((e) => e !== mi);
+        this.h.changed();
+        return { ok: true, hit: false };
+      }
+    }
     if (this.hasEff(att, 'shadowStep') && !info.isRanged) this.removeEff(att, 'shadowStep');
 
     // Реакции до броска: защитная вспышка, энтропийная защита, стиль «Защита»
@@ -1325,7 +1439,8 @@
     const sacred = this.getEff(att, 'sacredWeapon');
     if (sacred && atk.weapon && !atk.monster) bonus += sacred.value;
     if (this.hasEff(att, 'magicWeapon') && atk.weapon && !atk.isSpell) bonus += 1;
-    const bless = this.blessBonus(att);
+    let bless = this.blessBonus(att);
+    for (const e of att.effects) if (e.attackPenaltyDie) bless -= Dice.roll(e.attackPenaltyDie).total;
     let total = roll.value + bonus + bless;
     const ac = this.acOf(tgt);
     let crit = roll.value >= this.critRange(att, atk);
@@ -1389,7 +1504,7 @@
 
     const modeTxt = info.mode > 0 ? ' <span class="adv">[преимущество: ' + info.adv.join(', ') + ']</span>' : info.mode < 0 ? ' <span class="dis">[помеха: ' + info.dis.join(', ') + ']</span>' : '';
     const head = this.name(att) + ' ' + (ctx.opportunity ? 'совершает атаку по возможности' : 'атакует') + ' ' + this.name(tgt) + ' (' + U.escapeHtml(atk.name) + '): ' +
-      rollTxt(roll) + ' ' + U.fmtMod(bonus) + (bless ? ' +' + bless + ' (благ.)' : '') + extraTxt + ' = <b>' + total + '</b> против КД ' + ac + modeTxt;
+      rollTxt(roll) + ' ' + U.fmtMod(bonus) + (bless ? ' ' + U.fmtMod(bless) + ' (магия)' : '') + extraTxt + ' = <b>' + total + '</b> против КД ' + ac + modeTxt;
 
     // Невидимость (обычная) рассеивается при атаке
     if (this.removeCond(att, 'invisible', (x) => x.tag === 'invis')) this.log(this.name(att) + ' становится видимым.', 'muted');
@@ -1478,7 +1593,7 @@
     }
     const magical = !!atk.magical || !!atk.isSpell || (this.hasEff(att, 'magicWeapon') && atk.weapon);
     const before = tgt.hp + (tgt.tempHp || 0);
-    await this.applyDamage(tgt, parts, att, { crit, magical, melee: !info.isRanged, fromAttack: true, spell: !!atk.isSpell, spellLevel: ctx.spellLevel || 0, school: ctx.school });
+    if (parts.length) await this.applyDamage(tgt, parts, att, { crit, magical, melee: !info.isRanged, fromAttack: true, spell: !!atk.isSpell, spellLevel: ctx.spellLevel || 0, school: ctx.school });
     ctx.dealt = Math.max(0, before - (tgt.hp + (tgt.tempHp || 0)));
 
     if (!tgt.dead) await this.onHitEffects(att, atk, tgt, ctx, info);
@@ -1562,6 +1677,15 @@
       parts.push({ amount: Math.max(0, att.mods.wis), type: physType, txt: 'убийца врагов' });
     }
     if (ctx.maneuver && att.res.superiority) add('1d' + att.res.superiority.die, physType, 'боевой приём');
+    for (const e of att.effects) if (e.weaponDie && weaponAtk) add(e.weaponDie, physType, (R.EFFECTS[e.id] || { name: 'магия' }).name.toLowerCase());
+    const smite = att.effects.find((e) => e.smite && weaponAtk && (e.smite.any || meleeW));
+    if (smite) {
+      add(smite.smite.dice, smite.smite.type, (R.EFFECTS[smite.id] || { name: 'кара' }).name.toLowerCase());
+      att.effects = att.effects.filter((e) => e !== smite);
+      if (smite.smite.type === 'radiant') this.removeCond(tgt, 'invisible');
+      if (att.concentration && att.concentration.key === smite.conc) att.concentration = null;
+    }
+    for (const e of tgt.effects) if (e.curseDie && e.src === att.uid) add(e.curseDie.dice, e.curseDie.type, 'проклятие');
     if (ctx.charge && ctx.charge.dmg && ctx.charge.dmg[0]) add(ctx.charge.dmg[0].dice, ctx.charge.dmg[0].type, 'атака в броске');
     // Боевое вдохновение (коллегия доблести)
     const insp = att.effects.find((e) => e.id === 'inspiration' && e.valor);
@@ -1602,8 +1726,12 @@
         add(dice + 'd8', 'radiant', 'божественная кара');
       }
     }
+    if (weaponAtk && atk.ability === 'str' && att.effects.some((e) => e.halfStrDamage)) {
+      parts.forEach((p) => (p.amount = Math.floor(p.amount / 2)));
+      parts.push({ amount: 0, type: physType, txt: 'луч слабости: урон вдвое меньше' });
+    }
     for (const p of parts) notes.push(p.amount + ' ' + R.DAMAGE_SHORT[p.type] + (p.txt ? ' <span class="muted">(' + p.txt + ')</span>' : ''));
-    this.log('Урон: ' + notes.join(' + '), 'dmgroll');
+    if (parts.length) this.log('Урон: ' + notes.join(' + '), 'dmgroll');
     return parts.map((p) => ({ amount: p.amount, type: p.type }));
   };
 
@@ -2092,6 +2220,8 @@
     if (!t || t.uid !== c.uid) return 'не ваш ход';
     if (this.incap(c)) return 'недееспособен';
     if (opts.free) return null;
+    if (spell.cast === 'long') return 'накладывается вне боя (' + (spell.castTime || 'долго') + ')';
+    if (c.effects.some((e) => e.noSpells)) return 'не может накладывать заклинания';
     if (c.beast && !(c.flags && c.flags.beastSpells)) return 'в зверином облике нельзя колдовать';
     if (!(c.spells || []).includes(spell.id)) return 'заклинание не известно';
     const sc = c.spellcasting || {};
@@ -2185,11 +2315,15 @@
       isc.innateUsed = isc.innateUsed || {};
       isc.innateUsed[spell.id] = (isc.innateUsed[spell.id] || 0) + 1;
     } else if (spell.level > 0 && !opts.free) this.useSlot(c, slotLevel);
-    let conc = null;
-    if (spell.concentration) conc = this.startConcentration(c, spell, spell.rounds);
     if (this.removeCond(c, 'invisible', (x) => x.tag === 'invis')) this.log(this.name(c) + ' становится видимым.', 'muted');
-
     this.log('✨ ' + this.name(c) + ' накладывает <i>' + spell.name + '</i>' + (spell.level > 0 ? (innate ? ' (без ячейки)' : opts.free ? '' : ' (ячейка ' + slotLevel + ' ур.)') : '') + '.', 'spell');
+    if (!opts.recast && (await this.tryCounterspell(c, spell))) {
+      this.h.changed();
+      return { ok: true, countered: true };
+    }
+    let conc = null;
+    if (opts.noConc) conc = c.concentration ? c.concentration.key : null;
+    else if (spell.concentration) conc = this.startConcentration(c, spell, spell.rounds);
     const extraLv = Math.max(0, slotLevel - spell.level);
     const f = c.flags || {};
     let bonusOnce = 0;
@@ -2275,7 +2409,7 @@
         for (let i = 0; i < darts; i++) {
           const tgt = tgts[i % tgts.length];
           if (!tgt || tgt.dead) continue;
-          const r = rollD(spell.damage[0].dice);
+          const r = rollD(this.spellDice(c, spell, slotLevel, spell.damage[0].dice, !(spell.upcast && spell.upcast.dice)));
           const amt = r.total + (i === 0 ? bonusOnce : 0);
           this.log('Дротик ' + (i + 1) + ' → ' + this.name(tgt) + ': ' + amt + ' ' + R.DAMAGE_SHORT[spell.damage[0].type], 'dmgroll');
           await this.applyDamage(tgt, [{ amount: amt, type: spell.damage[0].type }], c, dmgOpts);
@@ -2331,7 +2465,7 @@
           } else if (spell.healFlat) amt = spell.healFlat + (spell.upcastFlat || 0) * extraLv;
           else {
             const dice = this.spellDice(c, spell, slotLevel, spell.heal);
-            amt = (f.supremeHealing ? Dice.max(dice) : Dice.roll(dice).total) + (spell.noMod ? 0 : sc.mod);
+            amt = (f.supremeHealing || o.effects.some((e) => e.maxHeal) ? Dice.max(dice) : Dice.roll(dice).total) + (spell.noMod ? 0 : sc.mod);
           }
           if (f.discipleOfLife && spell.level > 0) amt += 2 + slotLevel;
           await this.h.flashCells([[o.x, o.y]], '#7cfc7c');
@@ -2346,9 +2480,11 @@
       }
       case 'buff': {
         const count = (spell.count || 1) + (spell.upcast && spell.upcast.targets ? extraLv : 0);
-        const list = spell.target === 'self' ? [c] : tgts.slice(0, count);
+        let list = spell.target === 'self' ? [c] : tgts.slice(0, count);
+        if (spell.target === 'allies') list = this.B.combatants.filter((o) => !o.dead && o.x >= 0 && !this.hostile(c, o) && G.distFt(c, o) <= (spell.radius || 30));
         for (const o of list) {
           const expire = { who: c.uid, at: 'start', n: spell.rounds || 10 };
+          for (const id of spell.removes || []) this.removeCond(o, id);
           if (spell.effect === 'aid') {
             const v = 5 + 5 * extraLv;
             o.maxHp += v;
@@ -2371,11 +2507,21 @@
             if (this.addCond(o, 'invisible', { src: c.uid, conc, tag: spell.effect === 'invisibility' ? 'invis' : 'greater', expire })) this.log(this.name(o) + ' становится невидимым.', 'good');
             continue;
           }
-          const eff = { id: spell.effect, src: c.uid, conc, expire };
+          const eff = Object.assign({ id: spell.effect, src: c.uid, conc, expire }, U.deepClone(spell.effectData || {}));
+          if (eff.smite) eff.smite.dice = this.spellDice(c, spell, slotLevel, eff.smite.dice);
+          if (spell.resistChoice) {
+            const tp = await this.askReactor(c, c.name + ': от какого вида энергии защитить ' + o.name + '?', spell.resistChoice.map((x) => ({ label: R.DAMAGE_TYPES[x], value: x })), this.guessDamageType(c, spell.resistChoice));
+            eff.resist = [tp || 'fire'];
+            this.log(this.name(o) + ' получает сопротивление: ' + R.DAMAGE_TYPES[eff.resist[0]] + '.', 'good');
+          }
           if (spell.effect === 'heroism') eff.value = Math.max(1, sc.mod);
           this.addEff(o, eff);
           if (spell.effect === 'heroism') this.removeCond(o, 'frightened');
           this.log(this.name(o) + ': ' + (R.EFFECTS[spell.effect] || { name: spell.name }).name + '.', 'good');
+        }
+        if (spell.dashOnCast && t && t.uid === c.uid) {
+          t.move += this.speedOf(c);
+          this.log(this.name(c) + ' совершает Рывок.', 'action');
         }
         break;
       }
@@ -2399,11 +2545,17 @@
             this.log('Заклинание не действует на нежить.', 'muted');
             continue;
           }
-          const sv = await this.save(o, spell.save, sc.dc, { magic: true, cond: spell.condition });
+          if (spell.filter === 'beast' && o.type !== 'beast') {
+            this.log(this.name(o) + ' не зверь — заклинание не действует.', 'muted');
+            continue;
+          }
+          const sv = spell.noSave ? { ok: false } : await this.save(o, spell.save, sc.dc, { magic: true, cond: spell.condition });
           if (!sv.ok) {
-            const expire = { who: c.uid, at: 'start', n: spell.rounds || 10 };
+            const expire = spell.condRounds ? { who: o.uid, at: 'end', n: spell.condRounds } : { who: c.uid, at: 'start', n: spell.rounds || 10 };
+            if (spell.push) this.push(c, o, spell.push);
+            if (spell.dot) this.addEff(o, { id: 'phantasm', src: c.uid, conc, dot: spell.dot, linkCond: spell.condition, unique: false, silent: true, expire });
             if (spell.effect) {
-              const eff = { id: spell.effect, src: c.uid, conc, expire };
+              const eff = Object.assign({ id: spell.effect, src: c.uid, conc, expire }, U.deepClone(spell.effectData || {}));
               if (spell.repeatSave) eff.save = { ab: spell.save, dc: sc.dc, at: 'end' };
               this.addEff(o, eff);
               if (spell.effect === 'slowSpell') this.addEff(o, { id: 'noReactions', src: c.uid, conc, expire, silent: true });
@@ -2413,7 +2565,12 @@
               const cond = { src: c.uid, conc, expire };
               if (spell.repeatSave) cond.save = { ab: spell.save, dc: sc.dc, at: 'end' };
               if (spell.escape) cond.escape = { dc: sc.dc, ab: spell.escape };
-              if (this.addCond(o, spell.condition, cond)) this.log(this.name(o) + ': ' + R.CONDITIONS[spell.condition].name.toLowerCase() + '!', 'bad');
+              if (spell.fragile) cond.fragile = true;
+              if (spell.alsoCond) cond.alsoRemove = [spell.alsoCond];
+              if (this.addCond(o, spell.condition, cond)) {
+                this.log(this.name(o) + ': ' + R.CONDITIONS[spell.condition].name.toLowerCase() + '!', 'bad');
+                if (spell.alsoCond) this.addCond(o, spell.alsoCond, { src: c.uid, conc, expire, fragile: spell.fragile });
+              }
             }
           }
         }
@@ -2422,17 +2579,21 @@
       case 'sleep': {
         const cells = G.areaCells(this.B.map, spell.area, c, targeting.point || { x: c.x, y: c.y });
         await this.h.flashCells(cells, '#a0b8ff');
-        let pool = Dice.roll(spell.pool + (extraLv ? '+' + 2 * extraLv + 'd8' : '')).total;
-        this.log('Усыпление: запас хитов ' + pool + '.', 'spell');
+        const up = spell.upcastPool ? Dice.parse(spell.upcastPool).terms[0] : { count: 2, sides: 8 };
+        let pool = Dice.roll(spell.pool + (extraLv ? '+' + up.count * extraLv + 'd' + up.sides : '')).total;
+        const pc = spell.poolCondition || 'unconscious';
+        this.log(spell.name + ': запас хитов ' + pool + '.', 'spell');
         const victims = G.creaturesInCells(this.B, cells)
-          .filter((o) => o.hp > 0 && !this.hasCond(o, 'unconscious') && o.type !== 'undead' && !o.condImmune.includes('charmed') && !(o.flags && o.flags.feyAncestry))
+          .filter((o) => o !== c && o.hp > 0 && !this.hasCond(o, pc) && !o.condImmune.includes(pc) && (pc !== 'unconscious' || (o.type !== 'undead' && !o.condImmune.includes('charmed') && !(o.flags && o.flags.feyAncestry))))
           .sort((a, b) => a.hp - b.hp);
         for (const o of victims) {
           if (o.hp > pool) break;
           pool -= o.hp;
-          this.addCond(o, 'unconscious', { tag: 'sleep', src: c.uid, expire: { who: c.uid, at: 'start', n: 10 } });
-          this.addCond(o, 'prone', {});
-          this.log(this.name(o) + ' засыпает!', 'bad');
+          if (pc === 'unconscious') {
+            this.addCond(o, 'unconscious', { tag: 'sleep', src: c.uid, expire: { who: c.uid, at: 'start', n: 10 } });
+            this.addCond(o, 'prone', {});
+            this.log(this.name(o) + ' засыпает!', 'bad');
+          } else if (this.addCond(o, pc, { src: c.uid, expire: { who: c.uid, at: 'end', n: 2 } })) this.log(this.name(o) + ': ' + R.CONDITIONS[pc].name.toLowerCase() + '!', 'bad');
         }
         break;
       }
@@ -2447,8 +2608,19 @@
         break;
       }
       case 'cleanse': {
-        for (const o of tgts) {
-          for (const id of spell.removes) if (this.removeCond(o, id)) this.log(this.name(o) + ': «' + R.CONDITIONS[id].name + '» снято.', 'good');
+        let list = tgts;
+        if (spell.target === 'area') {
+          const cells = G.areaCells(this.B.map, spell.area, c, targeting.point || { x: c.x, y: c.y });
+          await this.h.flashCells(cells, '#9be7c0');
+          list = G.creaturesInCells(this.B, cells).filter((o) => !spell.friendlyOnly || !this.hostile(c, o));
+        }
+        for (const o of list) {
+          for (const id of spell.removes || []) if (this.removeCond(o, id)) this.log(this.name(o) + ': «' + R.CONDITIONS[id].name + '» снято.', 'good');
+          for (const id of spell.removesEff || []) if (o.effects.some((e) => e.id === id)) {
+            this.removeEff(o, id);
+            this.log(this.name(o) + ': «' + ((R.EFFECTS[id] || {}).name || id) + '» снято.', 'good');
+          }
+          if (spell.effect) this.addEff(o, Object.assign({ id: spell.effect, src: c.uid, conc, expire: { who: c.uid, at: 'start', n: spell.rounds || 600 } }, U.deepClone(spell.effectData || {})));
           if (spell.id === 'greaterrestoration') {
             o.effects = o.effects.filter((e) => !['hex', 'slowSpell', 'faerieFire'].includes(e.id) || !this.hostile(this.get(e.src) || o, o));
           }
@@ -2494,7 +2666,7 @@
       case 'banish': {
         const o = tgts[0];
         if (o && !o.dead) {
-          const sv = await this.save(o, spell.save || 'cha', sc.dc, { magic: true });
+          const sv = spell.noSave ? { ok: false } : await this.save(o, spell.save || 'cha', sc.dc, { magic: true });
           if (!sv.ok) {
             o.banished = { x: o.x, y: o.y, conc, src: c.uid };
             o.x = -1;
@@ -2525,9 +2697,78 @@
         }
         break;
       }
+      case 'utility':
+        this.log('<span class="muted">' + U.escapeHtml(spell.desc || '') + '</span>', 'spell');
+        break;
+      case 'stabilize': {
+        const o = tgts[0];
+        if (o && o.hp <= 0 && !o.dead && o.kind === 'pc') {
+          o.stable = true;
+          this.log(this.name(o) + ' стабилизирован.', 'good');
+        } else this.log('Цель не нуждается в стабилизации.', 'muted');
+        break;
+      }
+      case 'summon':
+        await this.doSummon(c, spell, slotLevel, conc);
+        break;
+      case 'polymorph':
+        await this.doPolymorph(c, spell, tgts, conc, sc);
+        break;
+      case 'spellWeapon': {
+        const w = spell.weapon;
+        this.addEff(c, {
+          id: 'spellWeapon', src: c.uid, conc, spellId: spell.id, silent: true, expire: { who: c.uid, at: 'start', n: spell.rounds || 10 },
+          data: { name: w.name, dice: this.spellDice(c, spell, slotLevel, w.dice), type: w.type, reach: w.reach || 5, cost: w.cost || 'bonus', toHit: sc.toHit },
+        });
+        this.log(this.name(c) + ': «' + w.name + '» готов к бою (' + (w.cost === 'action' ? 'действие' : 'бонусное действие') + ').', 'spell');
+        break;
+      }
+      case 'divineWord': {
+        this.log('📢 ' + this.name(c) + ' произносит Божественное слово!', 'spell');
+        for (const o of this.B.combatants.slice()) {
+          if (o.dead || o.x < 0 || !this.hostile(c, o) || G.distFt(c, o) > 30) continue;
+          const sv = await this.save(o, 'cha', sc.dc, { magic: true });
+          if (sv.ok) continue;
+          if (['celestial', 'elemental', 'fey', 'fiend'].includes(o.type)) {
+            this.kill(o, 'изгнан на родной план');
+            continue;
+          }
+          if (o.hp <= 20) this.kill(o, 'Божественное слово');
+          else {
+            const ex = (n) => ({ src: c.uid, expire: { who: o.uid, at: 'end', n } });
+            if (o.hp <= 50) this.addCond(o, 'deafened', ex(o.hp <= 40 ? 100 : 10));
+            if (o.hp <= 40) this.addCond(o, 'blinded', ex(100));
+            if (o.hp <= 30) this.addCond(o, 'stunned', ex(600));
+            this.log(this.name(o) + ' поражён Божественным словом.', 'bad');
+          }
+        }
+        break;
+      }
+      case 'timeStop': {
+        c.timeStop = Dice.roll('1d4').total;
+        this.log('⏳ Время останавливается! ' + this.name(c) + ' получает ещё ' + c.timeStop + ' ' + U.plural(c.timeStop, 'ход', 'хода', 'ходов') + ' подряд.', 'spell');
+        break;
+      }
+      case 'removeFromBattle': {
+        const o = tgts[0];
+        if (o && !o.dead) {
+          const sv = await this.save(o, spell.save || 'cha', sc.dc, { magic: true });
+          if (!sv.ok) this.kill(o, 'изгнан на другой план');
+        }
+        break;
+      }
+      case 'zoneOnly':
+        break;
       default:
         break;
     }
+    // Постоянные зоны (Лунный луч, Огненная стена, Туманное облако…)
+    if (spell.zone && spell.area && !opts.recast) {
+      const cells = G.areaCells(this.B.map, spell.area, c, targeting.point || { x: c.x + 2, y: c.y });
+      this.addZone(c, spell, cells, conc, slotLevel, sc);
+    }
+    // Повторяемые заклинания (Призыв молнии, Пылающий шар…)
+    if (spell.recast && !opts.recast && conc) this.addEff(c, { id: 'recast', src: c.uid, conc, spellId: spell.id, slot: slotLevel, cost: spell.recast.cost, silent: true });
     // Магия хаоса: дикая магия
     if (f.wildSurge && spell.level > 0 && !c.dead) await this.wildSurge(c);
     // Ограждающая защита восстанавливается от заклинаний ограждения
@@ -2542,6 +2783,231 @@
     await this.processBursts();
     await this.checkEnd();
     return { ok: true };
+  };
+
+  P.guessDamageType = function (c, list) {
+    const cnt = {};
+    for (const o of this.B.combatants) {
+      if (o.dead || !this.hostile(c, o)) continue;
+      for (const s of o.specials || []) for (const d of s.dmg || []) cnt[d.type] = (cnt[d.type] || 0) + 3;
+      for (const a of o.attacks || []) for (const d of a.dmg || []) cnt[d.type] = (cnt[d.type] || 0) + 1;
+    }
+    return list.slice().sort((a, b) => (cnt[b] || 0) - (cnt[a] || 0))[0];
+  };
+
+  /* Зоны заклинаний: действуют на существ, начинающих ход внутри */
+  P.addZone = function (c, spell, cells, conc, slotLevel, sc) {
+    const B = this.B;
+    B.zones = B.zones || [];
+    B.zones.push({
+      id: U.uid('zone'), owner: c.uid, conc, spellId: spell.id, name: spell.name, cells,
+      color: spell.zoneColor || (spell.damage && spell.damage[0] ? R.DAMAGE_COLORS[spell.damage[0].type] : '#c9a0ff'),
+      visual: spell.zone === 'visual', dc: sc.dc, save: spell.save || null, half: !!spell.half, noSave: !!spell.noSave, hostileOnly: !!spell.hostileOnly,
+      dmg: (spell.damage || []).map((dm, i) => ({ dice: this.spellDice(c, spell, slotLevel, dm.dice, i > 0), type: dm.type })),
+      condition: spell.condition || (spell.onFail && spell.onFail.effectCond) || null, escape: (spell.onFail && spell.onFail.escape) || spell.escape || null,
+      condRounds: spell.condRounds || 1, rounds: spell.rounds || 10,
+    });
+    this.h.changed();
+  };
+
+  P.zoneTrigger = async function (z, o) {
+    const inside = G.footprint(o.x, o.y, o.cells).some(([x, y]) => z.cells.some(([zx, zy]) => zx === x && zy === y));
+    if (!inside) return;
+    const owner = this.get(z.owner) || { uid: z.owner, side: 'enemies', flags: {}, name: '?' };
+    if (z.hostileOnly && !this.hostile(owner, o)) return;
+    this.log(this.name(o) + ' начинает ход в области «' + U.escapeHtml(z.name) + '».', 'spell');
+    let failed = true;
+    if (z.dmg.length) {
+      const rolled = z.dmg.map((d) => ({ type: d.type, r: Dice.roll(d.dice) }));
+      if (z.noSave || !z.save) await this.applyDamage(o, rolled.map((x) => ({ amount: x.r.total, type: x.type })), owner.uid ? this.get(owner.uid) : null, { magical: true, spell: true, fromAttack: false });
+      else {
+        const sv = await this.areaSaveDamage(owner.uid ? this.get(owner.uid) : null, o, z.save, z.dc, rolled, z.half, { magical: true, spell: true });
+        failed = sv ? !sv.ok : false;
+      }
+    } else if (z.save) {
+      const sv = await this.save(o, z.save, z.dc, { magic: true, cond: z.condition });
+      failed = !sv.ok;
+    }
+    if (failed && z.condition && !o.dead && !this.hasCond(o, z.condition)) {
+      const cond = { src: z.owner, conc: z.conc, expire: { who: o.uid, at: 'end', n: z.condRounds } };
+      if (z.escape) {
+        cond.escape = { dc: z.dc, ab: z.escape };
+        cond.expire = { who: o.uid, at: 'end', n: 10 };
+      }
+      if (this.addCond(o, z.condition, cond)) this.log(this.name(o) + ': ' + R.CONDITIONS[z.condition].name.toLowerCase() + '!', 'bad');
+    }
+  };
+
+  /* Призыв существ */
+  P.summonOptions = function (c, spell, slotLevel) {
+    const sm = spell.summon || {};
+    const mult = sm.slotMult ? (slotLevel >= 9 ? 4 : slotLevel >= 7 ? 3 : slotLevel >= 5 ? 2 : 1) : 1;
+    const out = [];
+    if (sm.fixed) {
+      for (const [id, n] of sm.fixed) {
+        const m = D.monster(id);
+        if (m) out.push({ m, n });
+      }
+      return out;
+    }
+    for (const [cr, n] of sm.table || []) {
+      const cands = (D.MONSTERS || []).filter((m) => (sm.types || ['beast']).includes(m.type) && R.crValue(m.cr) === cr && !m.swarm && !m.custom);
+      cands.sort((a, b) => b.hp - a.hp).slice(0, 4).forEach((m) => out.push({ m, n: Math.min(16, n * mult) }));
+    }
+    return out;
+  };
+
+  P.placeNear = function (ref, o) {
+    for (let r = 1; r < 12; r++)
+      for (let dy = -r; dy <= r; dy++)
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const x = ref.x + dx;
+          const y = ref.y + dy;
+          if (G.canStand(this.B, o, x, y, {}) && G.canEndAt(this.B, o, x, y)) {
+            o.x = x;
+            o.y = y;
+            return true;
+          }
+        }
+    return false;
+  };
+
+  P.doSummon = async function (c, spell, slotLevel, conc) {
+    const B = this.B;
+    const opts = this.summonOptions(c, spell, slotLevel);
+    if (!opts.length) {
+      this.log('Некого призвать.', 'muted');
+      return;
+    }
+    let pick;
+    if (c.controller === 'ai') pick = opts.slice().sort((a, b) => b.n * b.m.hp - a.n * a.m.hp)[0];
+    else {
+      const v = await this.h.ask(c.name + ': кого призвать?', opts.map((o, i) => ({ label: (o.n > 1 ? o.n + ' × ' : '') + o.m.name + ' (ПО ' + o.m.cr + ', ' + o.m.hp + ' хит.)', value: i })), c);
+      pick = opts[v == null ? 0 : v];
+    }
+    const idx = B.order.indexOf(c.uid);
+    let placed = 0;
+    for (let i = 0; i < pick.n; i++) {
+      const s = C.fromMonster(pick.m, c.side, { controller: c.controller });
+      s.name = pick.m.name + (pick.n > 1 ? ' ' + (i + 1) : '') + ' (призван)';
+      s.summonedBy = c.uid;
+      s.summonConc = conc;
+      s.xp = 0;
+      s.color = c.color;
+      s.player = c.player;
+      s.initiative = (c.initiative || 0) - 0.01;
+      s.acted = true;
+      if (!this.placeNear(c, s)) continue;
+      B.combatants.push(s);
+      B.order.splice(idx + 1 + placed, 0, s.uid);
+      placed++;
+    }
+    this.log('🐾 ' + this.name(c) + ' призывает: ' + (placed > 1 ? placed + ' × ' : '') + U.escapeHtml(pick.m.name) + '. Они ходят сразу после призывателя.', 'spell');
+    this.h.changed();
+  };
+
+  P.removeSummon = function (o) {
+    const B = this.B;
+    if (this.current() === o) {
+      o.dead = true;
+      o.vanished = true;
+      o.x = -1;
+      return;
+    }
+    const idx = B.order.indexOf(o.uid);
+    if (idx >= 0) {
+      B.order.splice(idx, 1);
+      if (idx < B.turnIdx) B.turnIdx--;
+    }
+    B.combatants = B.combatants.filter((x) => x !== o);
+    this.log(this.name(o) + ' исчезает.', 'muted');
+  };
+
+  /* Превращение */
+  P.polymorphForms = function (o, maxCR, anyType) {
+    const types = anyType ? ['beast', 'dragon', 'monstrosity', 'elemental', 'giant', 'plant'] : ['beast'];
+    const list = (D.MONSTERS || []).filter((m) => types.includes(m.type) && R.crValue(m.cr) <= maxCR && !m.swarm && !m.custom);
+    list.sort((a, b) => R.crValue(b.cr) - R.crValue(a.cr) || b.hp - a.hp);
+    return list.slice(0, 16);
+  };
+
+  P.doPolymorph = async function (c, spell, tgts, conc, sc) {
+    const list = spell.selfOnly ? [c] : tgts.slice(0, spell.count || 1);
+    for (const o of list) {
+      if (!o || o.dead || o.beast) continue;
+      const hostile = this.hostile(c, o);
+      if (hostile && spell.friendlyOnly) continue;
+      let m;
+      if (hostile) {
+        if (o.hp <= 0) continue;
+        const sv = await this.save(o, spell.save || 'wis', sc.dc, { magic: true });
+        if (sv.ok) continue;
+        m = D.monster('frog') || D.monster('rat');
+      } else {
+        const lvl = o.kind === 'pc' ? o.level || 1 : R.crValue(o.cr || 1);
+        const maxCR = spell.maxCR || (spell.selfOnly ? c.level || lvl : lvl);
+        const forms = this.polymorphForms(o, maxCR, spell.anyType);
+        if (!forms.length) continue;
+        if (o.controller === 'ai' && c.controller === 'ai') m = forms[0];
+        else {
+          const v = await this.h.ask(o.name + ': в кого превратиться?', forms.map((f) => ({ label: f.name + ' (ПО ' + f.cr + ', ' + f.hp + ' хит., КД ' + f.ac + ')', value: f.id })), c);
+          m = D.monster(v) || forms[0];
+        }
+      }
+      if (!m) continue;
+      const err = this.wildShape(o, m);
+      if (err) {
+        this.log(this.name(o) + ': ' + err + '.', 'muted');
+        continue;
+      }
+      o.beast.conc = conc;
+      this.log('🌀 ' + this.name(o) + ' превращается: ' + U.escapeHtml(m.name) + '!', 'spell');
+    }
+    this.h.changed();
+  };
+
+  /* Контрзаклинание (реакция) */
+  P.tryCounterspell = async function (c, spell) {
+    if (!spell || spell.level < 1) return false;
+    const cs = D.spell('counterspell');
+    if (!cs) return false;
+    for (const o of this.B.combatants) {
+      if (o === c || o.dead || o.x < 0 || !this.hostile(o, c) || !this.canReact(o) || !o.spellcasting) continue;
+      if (!(o.spells || []).includes('counterspell')) continue;
+      if (G.distFt(o, c) > 60 || !G.hasLOS(this.B.map, o, c)) continue;
+      const slots = this.availableSlots(o, 3);
+      const innate = !slots.length && this.usesInnate(o, cs, 0) && !this.castCheck(o, cs, 'innate', { free: true });
+      if (!slots.length && !innate) continue;
+      const choices = slots.map((l) => ({ label: 'Ячейка ' + l + ' ур.' + (l >= spell.level ? ' — наверняка' : ' — проверка Сл ' + (10 + spell.level)), value: l }));
+      if (innate) choices.push({ label: 'Без ячейки (3 ур.)', value: 'innate' });
+      choices.push({ label: 'Не мешать', value: 0 });
+      const best = slots.find((l) => l >= spell.level) || (innate ? 'innate' : slots[slots.length - 1]);
+      const aiPick = spell.level >= 2 || (c.kind === 'pc' && spell.level >= 1) ? best : 0;
+      const pick = await this.askReactor(o, o.name + ': ' + c.name + ' накладывает «' + spell.name + '» (' + spell.level + ' ур.). Контрзаклинание?', choices, aiPick);
+      if (!pick) continue;
+      let lvl = pick;
+      if (pick === 'innate') {
+        lvl = 3;
+        o.spellcasting.innateUsed = o.spellcasting.innateUsed || {};
+        o.spellcasting.innateUsed.counterspell = (o.spellcasting.innateUsed.counterspell || 0) + 1;
+      } else this.useSlot(o, pick);
+      o.reactionUsed = true;
+      this.log('🚫 ' + this.name(o) + ' отвечает <i>Контрзаклинанием</i>' + (pick === 'innate' ? '' : ' (ячейка ' + lvl + ' ур.)') + '!', 'spell');
+      let ok = lvl >= spell.level;
+      if (!ok) {
+        const r = Dice.d20(0);
+        const tot = r.value + o.spellcasting.mod;
+        ok = tot >= 10 + spell.level;
+        this.log('Проверка ' + R.ABILITY_GEN[o.spellcasting.ability || 'int'] + ': ' + rollTxt(r) + ' ' + U.fmtMod(o.spellcasting.mod) + ' = ' + tot + ' против Сл ' + (10 + spell.level) + '.', 'muted');
+      }
+      if (ok) {
+        this.log('Заклинание «' + spell.name + '» рассеивается, не успев подействовать!', 'warn');
+        return true;
+      }
+      this.log('Контрзаклинание не сработало.', 'muted');
+    }
+    return false;
   };
 
   P.wildSurge = async function (c) {
@@ -2576,7 +3042,10 @@
     const oh = spell.onHit;
     if (oh.drain && res && res.dealt > 0) this.heal(c, Math.floor(res.dealt * oh.drain));
     if (tgt.dead) return;
-    if (oh.effect) {
+    if (oh.effect && oh.concDuration) {
+      this.addEff(tgt, Object.assign({ id: oh.effect, src: c.uid, conc, expire: { who: c.uid, at: 'start', n: spell.rounds || 10 } }, U.deepClone(oh.effectData || {})));
+      this.log(this.name(tgt) + ': ' + ((R.EFFECTS[oh.effect] || {}).name || spell.name).toLowerCase() + '.', 'bad');
+    } else if (oh.effect) {
       let expire;
       if (oh.duration === 'casterNextStart') expire = { who: c.uid, at: 'start', n: 1 };
       else if (oh.duration === 'casterNextEnd') expire = { who: c.uid, at: 'end', n: 2 };
@@ -2589,7 +3058,7 @@
     }
     if (oh.save && oh.condition) {
       const sv = await this.save(tgt, oh.save, c.spellcasting.dc, { magic: true, cond: oh.condition, poison: oh.condition === 'poisoned' });
-      if (!sv.ok && this.addCond(tgt, oh.condition, { src: c.uid, expire: { who: c.uid, at: 'end', n: 2 } })) this.log(this.name(tgt) + ': ' + R.CONDITIONS[oh.condition].name.toLowerCase() + '!', 'bad');
+      if (!sv.ok && this.addCond(tgt, oh.condition, { src: c.uid, expire: { who: c.uid, at: 'end', n: oh.long ? 100 : 2 } })) this.log(this.name(tgt) + ': ' + R.CONDITIONS[oh.condition].name.toLowerCase() + '!', 'bad');
     }
     if (oh.pull && R.SIZES[tgt.size].order <= R.SIZES.large.order) this.pull(c, tgt, oh.pull);
   };
@@ -2600,12 +3069,15 @@
     if (of.prone && this.addCond(tgt, 'prone', {})) this.log(this.name(tgt) + ' сбит с ног!', 'bad');
     if (of.effectCond) {
       const n = of.rounds || 2;
-      if (this.addCond(tgt, of.effectCond, { src: c.uid, conc, expire: { who: of.rounds ? tgt.uid : c.uid, at: 'end', n } })) this.log(this.name(tgt) + ': ' + R.CONDITIONS[of.effectCond].name.toLowerCase() + '!', 'bad');
+      const cond = { src: c.uid, conc, expire: { who: of.rounds ? tgt.uid : c.uid, at: 'end', n } };
+      if (of.escape) cond.escape = { dc: (c.spellcasting && c.spellcasting.dc) || 13, ab: of.escape };
+      if (this.addCond(tgt, of.effectCond, cond)) this.log(this.name(tgt) + ': ' + R.CONDITIONS[of.effectCond].name.toLowerCase() + '!', 'bad');
     }
     if (of.effect) {
-      let expire = { who: tgt.uid, at: 'end', n: 1 };
+      let expire = { who: tgt.uid, at: 'end', n: of.rounds || 1 };
       if (of.duration === 'targetNextStart') expire = { who: tgt.uid, at: 'start', n: 1 };
-      this.addEff(tgt, { id: of.effect, src: c.uid, expire });
+      this.addEff(tgt, Object.assign({ id: of.effect, src: c.uid, expire }, U.deepClone(of.effectData || {})));
+      this.log(this.name(tgt) + ': ' + ((R.EFFECTS[of.effect] || {}).name || of.effect).toLowerCase() + '.', 'bad');
     }
   };
 
@@ -2975,6 +3447,17 @@
     if (f.feyPresence) add('feyPresence', 'Присутствие феи', 'action', hasAction && left(res.feyPresence), { target: 'self' });
     if (f.tidesOfChaos) add('tides', 'Поток хаоса (преимущество)', 'free', left(res.tides) && !this.hasEff(c, 'tides'), { target: 'self' });
     if (f.breathWeapon && c.ancestry && !c.beast) add('dragonBreath', 'Оружие дыхания (' + R.DAMAGE_SHORT[c.ancestry.type] + ')', 'action', hasAction && left(res.breath), { target: 'area', area: c.ancestry.shape === 'line' ? { shape: 'line', size: 30 } : { shape: 'cone', size: 15 }, color: R.DAMAGE_COLORS[c.ancestry.type] });
+    if (c.effects.some((e) => e.bonusDash)) add('magicDash', 'Поспешное отступление: Рывок', 'bonus', hasBonus, { target: 'self' });
+    for (const e of c.effects) {
+      if (e.id === 'recast') {
+        const sp = D.spell(e.spellId);
+        if (!sp) continue;
+        const ok = e.cost === 'bonus' ? hasBonus : hasAction;
+        if (sp.target === 'area') add('recast:' + sp.id, 'Повторить: ' + sp.name, e.cost, ok, { target: 'area', area: sp.area, range: sp.range, color: sp.damage && sp.damage[0] ? R.DAMAGE_COLORS[sp.damage[0].type] : '#c9a0ff' });
+        else add('recast:' + sp.id, 'Повторить: ' + sp.name, e.cost, ok, { target: 'enemy', range: sp.range || 60 });
+      }
+      if (e.id === 'spellWeapon') add('spellWeapon:' + e.spellId, e.data.name + ': атака', e.data.cost, e.data.cost === 'bonus' ? hasBonus : hasAction, { target: 'self' });
+    }
     if (t.flags.hasteAction && t.actions <= 0) {
       add('hasteDash', 'Ускорение: Рывок', 'free', true, { target: 'self' });
       add('hasteDisengage', 'Ускорение: Отход', 'free', true, { target: 'self' });
@@ -3052,6 +3535,27 @@
     const fail = (reason) => ({ ok: false, reason });
     const lv = c.level || 1;
     const B = this.B;
+    if (id === 'magicDash') return this.dash(c, 'bonus');
+    if (id.startsWith('recast:')) {
+      const e = c.effects.find((x) => x.id === 'recast' && x.spellId === id.slice(7));
+      const sp = e && D.spell(e.spellId);
+      if (!sp) return fail('заклинание закончилось');
+      if (e.cost === 'bonus' ? !t.bonus : t.actions <= 0) return fail('нет ' + (e.cost === 'bonus' ? 'бонусного действия' : 'действия'));
+      if (sp.target === 'area' && !args.aim) return fail('выберите точку');
+      if (sp.target !== 'area' && !args.target) return fail('выберите цель');
+      return this.castSpell(c, sp.id, e.slot, sp.target === 'area' ? { point: args.aim } : { targets: [args.target.uid] }, { free: true, recast: true, noConc: true, castAs: e.cost, slotLevel: e.slot, dc: c.spellcasting && c.spellcasting.dc });
+    }
+    if (id.startsWith('spellWeapon:')) {
+      const e = c.effects.find((x) => x.id === 'spellWeapon' && x.spellId === id.slice(12));
+      if (!e) return fail('оружие исчезло');
+      const err = this.spend(c, e.data.cost);
+      if (err) return fail(err);
+      t.bonusAttack = {
+        count: 1,
+        spiritual: { id: 'sw_' + e.spellId, name: e.data.name, kind: 'melee', toHit: e.data.toHit, reach: e.data.reach, proxyMelee: e.data.reach > 5, dmg: [{ dice: e.data.dice, type: e.data.type }], isSpell: true, magical: true },
+      };
+      return { ok: true };
+    }
     if (id.startsWith('sp:')) {
       const s = c.specials.find((x) => x.id === id.slice(3));
       if (!s) return fail('нет способности');

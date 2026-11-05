@@ -5,7 +5,7 @@ const path = require('path');
 
 const files = [
   'core/util.js', 'core/dice.js', 'data/rules.js', 'data/equipment.js', 'data/races.js', 'data/classes.js',
-  'data/spells.js', 'data/srd-monsters.js', 'data/monsters.js', 'data/tiles.js', 'data/maps.js',
+  'data/spells.js', 'data/spells-srd.js', 'data/srd-monsters.js', 'data/monsters.js', 'data/tiles.js', 'data/maps.js',
   'engine/character.js', 'engine/grid.js', 'engine/combat.js', 'engine/ai.js',
 ];
 for (const f of files) require(path.join(__dirname, '..', 'src', 'js', f));
@@ -266,6 +266,151 @@ test('врождённые заклинания монстров без ячее
   await E.beginCombat();
   for (const k in c.spellcasting.slots) c.spellcasting.slots[k].used = c.spellcasting.slots[k].max;
   assert.ok(E.usesInnate(c, D.spell(id), 0));
+});
+
+function spellArena(spellIds, level) {
+  const map = D.PRESET_MAPS.find((m) => m.id === 'preset_field');
+  const B = D.Combat.newBattle(map);
+  const wiz = D.Char.toCombatant(makeHero('wizard', 'human', level || 20), 'heroes');
+  wiz.spells = spellIds.slice();
+  wiz.spellcasting.slots = {};
+  for (let l = 1; l <= 9; l++) wiz.spellcasting.slots[l] = { max: 3, used: 0 };
+  wiz.controller = 'ai';
+  wiz.x = 4;
+  wiz.y = 6;
+  const ally = D.Char.toCombatant(makeHero('fighter', 'human', 10), 'heroes');
+  ally.controller = 'ai';
+  ally.x = 5;
+  ally.y = 6;
+  ally.hp = 1;
+  B.combatants.push(wiz, ally);
+  const foes = [];
+  for (const [id, x, y] of [['ogre', 9, 5], ['goblin', 9, 8], ['skeleton', 12, 6]]) {
+    const f = D.Combat.fromMonster(D.monster(id), 'enemies');
+    f.x = x;
+    f.y = y;
+    B.combatants.push(f);
+    foes.push(f);
+  }
+  const E = new D.Combat.Engine(B, {});
+  wiz.initiative = 30;
+  ally.initiative = 20;
+  foes.forEach((f) => (f.initiative = 1));
+  return { B, E, wiz, ally, foes };
+}
+
+test('каждое заклинание SRD накладывается в бою без ошибок', async () => {
+  assert.ok(D.SPELLS.length >= 319, 'заклинаний: ' + D.SPELLS.length);
+  const errors = [];
+  const origErr = console.error;
+  console.error = (...a) => errors.push(a.map((x) => (x && x.stack) || String(x)).join(' '));
+  try {
+    for (const sp of D.SPELLS) {
+      D.Dice.setRng(seeded(sp.id.length * 7 + sp.level));
+      const { B, E, wiz, ally, foes } = spellArena([sp.id]);
+      await E.beginCombat();
+      const friendly = ['heal', 'cleanse', 'revive', 'stabilize'].includes(sp.kind) || (sp.kind === 'buff' && !sp.hostile);
+      let targeting = {};
+      if (sp.target === 'creature' || sp.target === 'creatures') {
+        let tgt = friendly ? ally : foes[0];
+        if (sp.kind === 'revive') {
+          ally.hp = 0;
+          ally.dead = true;
+        }
+        if (sp.kind === 'stabilize') ally.hp = 0;
+        if (sp.range <= 5) {
+          tgt.x = wiz.x + 1;
+          tgt.y = wiz.y + 1;
+          if (tgt === foes[0]) {
+            tgt.x = wiz.x + 1;
+            tgt.y = wiz.y - 2;
+          }
+        }
+        targeting = { targets: [tgt.uid] };
+      } else if (sp.target === 'area' || sp.target === 'point') {
+        targeting = { point: sp.target === 'point' ? { x: wiz.x + 0.5, y: wiz.y + 3.5 } : sp.area && sp.area.origin === 'self' ? { x: 9.5, y: 6.5 } : { x: 9.5, y: 6.5 } };
+      }
+      let r;
+      try {
+        r = await E.castSpell(wiz, sp.id, sp.level, targeting);
+      } catch (e) {
+        throw new Error(sp.id + ': ' + (e.stack || e));
+      }
+      assert.ok(r && (r.ok || typeof r.reason === 'string'), sp.id);
+      if (sp.cast !== 'long' && sp.cast !== 'reaction' && sp.kind !== 'reaction' && !r.ok) {
+        const okReasons = ['вне дистанции', 'нет линии обзора', 'место занято', 'слишком далеко', 'точка вне дистанции', 'выберите цель'];
+        assert.ok(okReasons.some((x) => r.reason.includes(x)), sp.id + ': ' + r.reason);
+      }
+      // несколько ходов ИИ: зоны, повторения, призванные
+      let guard = 0;
+      if (B.phase === 'combat' && E.current() === wiz) await E.endTurn();
+      while (B.phase === 'combat' && guard < 12) {
+        const c = E.current();
+        await D.AI.takeTurn(E, c, { delay: 0 });
+        guard++;
+      }
+      if (errors.length) throw new Error(sp.id + ': ' + errors[0]);
+    }
+  } finally {
+    console.error = origErr;
+    D.Dice.setRng(null);
+  }
+});
+
+test('контрзаклинание, призыв, превращение и зоны', async () => {
+  D.Dice.setRng(seeded(21));
+  // Контрзаклинание
+  {
+    const { B, E, wiz, foes } = spellArena(['fireball']);
+    const mage = D.Combat.fromMonster(D.monster('mage'), 'enemies');
+    mage.x = 12;
+    mage.y = 3;
+    mage.spells.push('counterspell');
+    mage.spellcasting.slots[3] = { max: 3, used: 0 };
+    B.combatants.push(mage);
+    mage.initiative = 1;
+    await E.beginCombat();
+    const r = await E.castSpell(wiz, 'fireball', 3, { point: { x: 9.5, y: 6.5 } });
+    assert.ok(r.ok && r.countered, 'огненный шар должен быть прерван');
+    assert.ok(foes.every((f) => f.hp === f.maxHp));
+  }
+  // Призыв животных и их исчезновение при потере концентрации
+  {
+    const { B, E, wiz } = spellArena(['conjureanimals']);
+    await E.beginCombat();
+    const r = await E.castSpell(wiz, 'conjureanimals', 3, {});
+    assert.ok(r.ok, r.reason);
+    const summoned = B.combatants.filter((o) => o.summonedBy === wiz.uid);
+    assert.ok(summoned.length >= 1 && summoned.every((o) => o.x >= 0 && B.order.includes(o.uid)));
+    E.endConcentration(wiz, 'тест');
+    assert.strictEqual(B.combatants.filter((o) => o.summonedBy === wiz.uid && !o.vanished).length, 0);
+  }
+  // Превращение врага и возврат облика
+  {
+    const { E, wiz, foes } = spellArena(['polymorph']);
+    await E.beginCombat();
+    foes[0].saves.wis = -50;
+    const r = await E.castSpell(wiz, 'polymorph', 4, { targets: [foes[0].uid] });
+    assert.ok(r.ok, r.reason);
+    assert.ok(foes[0].beast && foes[0].maxHp < 10, 'огр должен стать жабой');
+    E.endConcentration(wiz, 'тест');
+    assert.ok(!foes[0].beast && foes[0].maxHp === D.monster('ogre').hp);
+  }
+  // Зона Лунного луча наносит урон в начале хода
+  {
+    const { B, E, wiz, foes } = spellArena(['moonbeam']);
+    await E.beginCombat();
+    const r = await E.castSpell(wiz, 'moonbeam', 2, { point: { x: 9.5, y: 5.5 } });
+    assert.ok(r.ok, r.reason);
+    assert.strictEqual(B.zones.length, 1);
+    const ogre = foes[0];
+    ogre.hp = ogre.maxHp;
+    await E.zoneTrigger(B.zones[0], ogre);
+    assert.ok(ogre.hp < ogre.maxHp, 'огр в лунном луче должен получить урон');
+    E.endConcentration(wiz, 'тест');
+    assert.strictEqual(B.zones.length, 0);
+  }
+  D.Dice.setRng(null);
 });
 
 test('заклинания игроков применяются', async () => {

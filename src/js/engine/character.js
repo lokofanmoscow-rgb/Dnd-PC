@@ -71,8 +71,9 @@
     const lim = Char.spellLimits(ch);
     const all = Char.spellList(ch);
     const bonus = Char.bonusSpells(ch);
-    const cantrips = all.filter((s) => s.level === 0).slice(0, lim.cantrips).map((s) => s.id);
-    const leveled = all.filter((s) => s.level > 0 && !bonus.includes(s.id)).sort((a, b) => b.level - a.level).slice(0, lim.spells).map((s) => s.id);
+    const combat = (s) => (s.kind !== 'utility' && s.cast !== 'long' ? 1 : 0);
+    const cantrips = all.filter((s) => s.level === 0).sort((a, b) => combat(b) - combat(a)).slice(0, lim.cantrips).map((s) => s.id);
+    const leveled = all.filter((s) => s.level > 0 && !bonus.includes(s.id)).sort((a, b) => combat(b) - combat(a) || b.level - a.level).slice(0, lim.spells).map((s) => s.id);
     return cantrips.concat(leveled);
   };
 

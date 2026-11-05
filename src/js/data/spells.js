@@ -206,7 +206,7 @@
     { id: 'invisibility', en: 'Invisibility', name: 'Невидимость', level: 2, school: 'illusion', cast: 'action', range: 5, kind: 'buff', target: 'creatures', count: 1, effect: 'invisibility',
       concentration: true, rounds: 600, upcast: { targets: 1 }, classes: ['bard', 'sorcerer', 'warlock', 'wizard'], desc: 'Существо невидимо, пока не атакует или не наложит заклинание. Концентрация.' },
     { id: 'web', en: 'Web', name: 'Паутина', level: 2, school: 'conjuration', cast: 'action', range: 60, kind: 'control', save: 'dex', target: 'area',
-      area: { shape: 'square', size: 20, origin: 'point' }, condition: 'restrained', escape: 'str', concentration: true, rounds: 600, classes: ['sorcerer', 'wizard'],
+      area: { shape: 'square', size: 20, origin: 'point' }, condition: 'restrained', escape: 'str', concentration: true, rounds: 600, zone: true, zoneColor: '#e8e8e8', classes: ['sorcerer', 'wizard'],
       desc: 'Куб 20 фт.: спасбросок Ловкости или существа опутаны. Освободиться — действием, проверка Силы.' },
     { id: 'magicweapon', en: 'Magic Weapon', name: 'Магическое оружие', level: 2, school: 'transmutation', cast: 'bonus', range: 5, kind: 'buff', target: 'creature', effect: 'magicWeapon',
       concentration: true, rounds: 600, classes: ['paladin', 'wizard'], desc: 'Оружие существа становится магическим: +1 к атаке и урону. Концентрация.' },
@@ -232,10 +232,10 @@
     { id: 'dimensiondoor', en: 'Dimension Door', name: 'Переносящая дверь', level: 4, school: 'conjuration', cast: 'action', range: 500, kind: 'teleport', target: 'point',
       classes: ['bard', 'sorcerer', 'warlock', 'wizard'], desc: 'Телепортация на расстояние до 500 фт.' },
     { id: 'cloudkill', en: 'Cloudkill', name: 'Облако смерти', level: 5, school: 'conjuration', cast: 'action', range: 120, kind: 'save', save: 'con', half: true, target: 'area',
-      area: { shape: 'sphere', size: 20, origin: 'point' }, damage: [{ dice: '5d8', type: 'poison' }], upcast: { dice: '1d8' }, classes: ['sorcerer', 'warlock', 'wizard'],
-      desc: 'Сфера 20 фт.: спасбросок Телосложения, 5d8 урона ядом.' },
+      area: { shape: 'sphere', size: 20, origin: 'point' }, damage: [{ dice: '5d8', type: 'poison' }], upcast: { dice: '1d8' }, zone: true, concentration: true, rounds: 10, classes: ['sorcerer', 'warlock', 'wizard'],
+      desc: 'Ядовитое облако радиусом 20 фт.: спасбросок Телосложения, 5к8 урона ядом; существо, начинающее ход в облаке, повторяет спасбросок. Концентрация.' },
     { id: 'insectplague', en: 'Insect Plague', name: 'Рой насекомых', level: 5, school: 'conjuration', cast: 'action', range: 300, kind: 'save', save: 'con', half: true, target: 'area',
-      area: { shape: 'sphere', size: 20, origin: 'point' }, damage: [{ dice: '4d10', type: 'piercing' }], upcast: { dice: '1d10' }, classes: ['cleric', 'druid', 'sorcerer'],
+      area: { shape: 'sphere', size: 20, origin: 'point' }, damage: [{ dice: '4d10', type: 'piercing' }], upcast: { dice: '1d10' }, zone: true, concentration: true, rounds: 10, classes: ['cleric', 'druid', 'sorcerer'],
       desc: 'Сфера 20 фт.: спасбросок Телосложения, 4d10 колющего урона.' },
     { id: 'destructivewave', en: 'Destructive Wave', name: 'Разрушительная волна', level: 5, school: 'evocation', cast: 'action', range: 0, kind: 'save', save: 'con', half: true, target: 'area',
       area: { shape: 'aura', size: 30, origin: 'self' }, hostileOnly: true, damage: [{ dice: '5d6', type: 'thunder' }, { dice: '5d6', type: 'radiant' }], onFail: { prone: true },
@@ -276,7 +276,7 @@
       area: { shape: 'sphere', size: 60, origin: 'point' }, damage: [{ dice: '12d6', type: 'radiant' }], onFail: { effectCond: 'blinded', rounds: 10 }, classes: ['druid', 'sorcerer', 'wizard'],
       desc: 'Сфера 60 фт.: спасбросок Телосложения, 12d6 урона излучением, при провале ослеплены на 1 минуту.' },
     { id: 'incendiarycloud', en: 'Incendiary Cloud', name: 'Испепеляющее облако', level: 8, school: 'conjuration', cast: 'action', range: 150, kind: 'save', save: 'dex', half: true, target: 'area',
-      area: { shape: 'sphere', size: 20, origin: 'point' }, damage: [{ dice: '10d8', type: 'fire' }], classes: ['sorcerer', 'wizard'], desc: 'Сфера 20 фт.: спасбросок Ловкости, 10d8 урона огнём.' },
+      area: { shape: 'sphere', size: 20, origin: 'point' }, damage: [{ dice: '10d8', type: 'fire' }], zone: true, concentration: true, rounds: 10, classes: ['sorcerer', 'wizard'], desc: 'Сфера 20 фт.: спасбросок Ловкости, 10d8 урона огнём.' },
     { id: 'powerwordstun', en: 'Power Word Stun', name: 'Слово силы: оглушение', level: 8, school: 'enchantment', cast: 'action', range: 60, kind: 'pwstun', target: 'creature', threshold: 150,
       classes: ['bard', 'sorcerer', 'warlock', 'wizard'], desc: 'Если у цели 150 хитов или меньше, она ошеломлена (спасбросок Телосложения в конце каждого её хода).' },
     { id: 'meteorswarm', en: 'Meteor Swarm', name: 'Метеоритный дождь', level: 9, school: 'evocation', cast: 'action', range: 500, kind: 'save', save: 'dex', half: true, target: 'area',
@@ -295,4 +295,9 @@
   D.spell = (id) => S.find((s) => s.id === id);
   D.classSpells = (clsId, maxLevel) => S.filter((s) => s.classes.includes(clsId) && s.level <= maxLevel);
   D.spellByEn = (en) => S.find((s) => s.en === en);
+  D.spellInfoLine = (s) => {
+    const i = s.info;
+    if (!i) return '';
+    return 'Время: ' + i.time + (i.ritual ? ' (ритуал)' : '') + ' · Дистанция: ' + i.range + ' · Длительность: ' + i.dur + ' · Компоненты: ' + i.comp;
+  };
 })(typeof window !== 'undefined' ? window : globalThis);

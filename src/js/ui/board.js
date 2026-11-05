@@ -775,6 +775,28 @@
         ctx.fillText(ov.pathLabel, tx, ty);
       }
     }
+    // Зоны заклинаний
+    if (ov.zones && ov.zones.length) {
+      for (const z of ov.zones) {
+        ctx.fillStyle = hexA(z.color || '#c9a0ff', 0.22);
+        for (const [x, y] of z.cells) ctx.fillRect(this.ox + x * s, this.oy + y * s, s, s);
+        ctx.strokeStyle = hexA(z.color || '#c9a0ff', 0.55);
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        const set = new Set(z.cells.map(([x, y]) => x + ',' + y));
+        ctx.beginPath();
+        for (const [x, y] of z.cells) {
+          const px = this.ox + x * s;
+          const py = this.oy + y * s;
+          if (!set.has(x + ',' + (y - 1))) { ctx.moveTo(px, py); ctx.lineTo(px + s, py); }
+          if (!set.has(x + ',' + (y + 1))) { ctx.moveTo(px, py + s); ctx.lineTo(px + s, py + s); }
+          if (!set.has(x - 1 + ',' + y)) { ctx.moveTo(px, py); ctx.lineTo(px, py + s); }
+          if (!set.has(x + 1 + ',' + y)) { ctx.moveTo(px + s, py); ctx.lineTo(px + s, py + s); }
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
     // Область
     if (ov.area) {
       ctx.fillStyle = hexA(ov.areaColor || '#ff8a3d', 0.35);

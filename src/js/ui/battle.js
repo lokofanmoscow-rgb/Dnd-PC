@@ -168,6 +168,7 @@
         ov.showCursor = B.phase === 'setup' && !!ui.placing;
         ov.cursorSize = ui.placing ? (E.get(ui.placing) || { cells: 1 }).cells : 1;
         if (!ui.dragUid) ov.area = null;
+        ov.zones = B.zones || [];
         ov.rangeCircle = null;
         ov.path = null;
         ov.pathLabel = null;
@@ -209,7 +210,7 @@
         const c = cur();
         B.order.forEach((uid) => {
           const o = E.get(uid);
-          if (!o) return;
+          if (!o || o.vanished) return;
           const frac = U.clamp(o.hp / o.maxHp, 0, 1);
           const showHp = o.side !== 'enemies' || settings.enemyHp;
           initbar.appendChild(el('div', {
@@ -547,7 +548,7 @@
             btns.appendChild(el('button', {
               class: ui.mode === 'spell' && ui.spellId === sp.id ? 'toggled' : '',
               disabled: busy || (!!err && !quickOk) || (sp.level > 0 && !minSlot),
-              title: sp.desc + (err ? '\n\n⛔ ' + err : '') + (sp.concentration ? '\n(концентрация)' : ''),
+              title: sp.desc + (sp.info ? '\n\n' + D.spellInfoLine(sp) : '') + (err ? '\n\n⛔ ' + err : '') + (sp.concentration ? '\n(концентрация)' : ''),
               onclick: () => startSpell(c, sp, !!err && quickOk),
             }, (sp.level ? sp.level + '◆ ' : '') + sp.name + (innate ? ' ◇' : '') + (sp.cast === 'bonus' ? ' ✴' : '') + (sp.concentration ? ' 🧠' : '')));
           }
@@ -638,7 +639,7 @@
       function startSpell(c, sp, quicken) {
         let slot = sp.level ? E.lowestSlot(c, sp.level) : 0;
         if (sp.level && !slot && E.usesInnate(c, sp, 0)) slot = 'innate';
-        if (sp.target === 'self' || (sp.area && sp.area.shape === 'aura' && sp.kind !== 'save')) {
+        if (sp.target === 'self' || sp.target === 'allies' || (sp.area && sp.area.shape === 'aura' && sp.kind !== 'save')) {
           return run(() => E.castSpell(c, sp.id, slot, {}, { quicken }));
         }
         setMode('spell', { spellId: sp.id, slot, quicken });
@@ -746,7 +747,7 @@
           const sp = currentSpell();
           if (!sp || !['creature', 'creatures'].includes(sp.target)) return null;
           const range = Math.max(5, sp.range);
-          const friendly = ['heal', 'cleanse', 'revive'].includes(sp.kind) || (sp.kind === 'buff' && !sp.hostile);
+          const friendly = ['heal', 'cleanse', 'revive', 'stabilize'].includes(sp.kind) || (sp.kind === 'buff' && !sp.hostile);
           const pool = friendly ? B.combatants.filter((o) => o.x >= 0) : all;
           return pool.filter((o) => {
             if (sp.kind === 'revive' ? !o.dead : o.dead) return false;

@@ -210,6 +210,37 @@
       if (!scored.length) return null;
       return { ev: scored.reduce((a, x) => a + x.ev, 0), targets: scored.map((x) => x.o.uid) };
     }
+    if (s.kind === 'utility' || s.kind === 'zoneOnly' && !enemies.length) return null;
+    if (s.kind === 'summon') {
+      if (c.concentration || !AI.enemies(E, c).length) return null;
+      return { ev: 14 + s.level * 3, targets: [] };
+    }
+    if (s.kind === 'polymorph' && !s.friendlyOnly && !s.selfOnly) {
+      if (c.concentration) return null;
+      const o = enemies.filter((x) => !x.beast && x.hp > 0).sort((a, b) => b.hp - a.hp)[0];
+      if (!o) return null;
+      return { ev: 6 + Math.min(40, o.hp * 0.25) * failChance(o.saves[s.save || 'wis'] || 0, sc.dc), targets: [o.uid] };
+    }
+    if (s.kind === 'spellWeapon') {
+      if (c.concentration) return null;
+      return AI.enemies(E, c).some((o) => G.distFt(c, o) <= Math.max(10, s.weapon.reach || 5) + 30) ? { ev: 9 + s.level, targets: [] } : null;
+    }
+    if (s.kind === 'divineWord') {
+      const n = AI.enemies(E, c).filter((o) => G.distFt(c, o) <= 30 && o.hp <= 50).length;
+      return n ? { ev: n * 12, targets: [] } : null;
+    }
+    if (s.kind === 'removeFromBattle') {
+      const o = enemies.slice().sort((a, b) => b.hp - a.hp)[0];
+      return o ? { ev: o.hp * 0.3 * failChance(o.saves.cha || 0, sc.dc), targets: [o.uid] } : null;
+    }
+    if (s.kind === 'zoneOnly' && s.area) {
+      if (c.concentration && s.concentration) return null;
+      const avg = (s.damage || []).reduce((sum, d) => sum + Dice.average(d.dice), 0) || 6;
+      const aim = AI.bestAim(E, c, s.area, c, avg, s.save || 'dex', sc.dc, null);
+      if (!aim.aim || aim.hits < 1) return null;
+      if (s.area.origin === 'point' && G.distToCellFt(c, Math.floor(aim.aim.x), Math.floor(aim.aim.y)) > s.range) return null;
+      return { ev: aim.score, point: aim.aim };
+    }
     if (s.kind === 'kill' || s.kind === 'pwstun') {
       const cand = enemies.filter((o) => o.hp <= (s.threshold || 100) && !(s.kind === 'pwstun' && E.hasCond(o, 'stunned'))).sort((a, b) => b.hp - a.hp);
       if (!cand.length) return null;
@@ -229,6 +260,7 @@
       return { ev: aim.score * 0.8, point: aim.aim };
     }
     if (s.kind === 'save' && s.target === 'area') {
+      if (s.concentration && c.concentration) return null;
       const avg = s.damage.reduce((sum, d) => sum + Dice.average(E.spellDice(c, s, slot, d.dice)), 0);
       const aim = AI.bestAim(E, c, s.area, c, avg, s.save, sc.dc, s.damage[0].type);
       if (!aim.aim) return null;
@@ -236,7 +268,7 @@
       return { ev: aim.score, point: aim.aim };
     }
     if (s.kind === 'control' && s.target !== 'area') {
-      const cand = enemies.filter((o) => !E.hasCond(o, s.condition) && (s.filter !== 'humanoid' || o.type === 'humanoid') && (s.filter !== 'notUndead' || o.type !== 'undead'));
+      const cand = enemies.filter((o) => (!s.condition || !E.hasCond(o, s.condition)) && (!s.effect || !E.hasEff(o, s.effect)) && (s.filter !== 'humanoid' || o.type === 'humanoid') && (s.filter !== 'beast' || o.type === 'beast') && (s.filter !== 'notUndead' || o.type !== 'undead'));
       if (!cand.length || c.concentration) return null;
       const o = cand.sort((a, b) => b.maxHp - a.maxHp)[0];
       return { ev: 14 * failChance(o.saves[s.save] || 0, sc.dc), targets: [o.uid] };
@@ -254,6 +286,7 @@
     }
     if (s.kind === 'buff' && s.target === 'self' && s.effect && !E.hasEff(c, s.effect)) {
       if (s.concentration && c.concentration) return null;
+      if (s.ai === 'selfBuff') return AI.enemies(E, c).some((o) => G.distFt(c, o) <= 60) ? { ev: 6 + s.level, targets: [] } : null;
       if (s.effect === 'falseLife') return c.tempHp ? null : { ev: 5, targets: [] };
       if (['divineFavor', 'thunderousSmite'].includes(s.effect) && AI.enemies(E, c).some((o) => G.distFt(c, o) <= 10)) return { ev: 6, targets: [] };
       return null;
@@ -271,6 +304,44 @@
       return { ev: 3 * al.length, targets: al.map((o) => o.uid) };
     }
     return null;
+  };
+
+  AI.useRecastAndWeapons = async function (E, c, cost, opts) {
+    const feats = E.featureActions(c).filter((f) => f.enabled && f.cost === cost && (f.id.startsWith('recast:') || f.id.startsWith('spellWeapon:')));
+    for (const f of feats) {
+      if (f.id.startsWith('spellWeapon:')) {
+        const e = c.effects.find((x) => x.id === 'spellWeapon' && x.spellId === f.id.slice(12));
+        const o = AI.enemies(E, c).filter((x) => G.distFt(c, x) <= e.data.reach).sort((a, b) => a.hp - b.hp)[0];
+        if (!o) continue;
+        const r = await E.useFeature(c, f.id);
+        if (r && r.ok) {
+          await E.doAttack(c, 'sw_' + e.spellId, o, { bonus: true });
+          await AI.wait(opts);
+          return true;
+        }
+        continue;
+      }
+      const sp = D.spell(f.id.slice(7));
+      if (sp.target === 'area') {
+        const avg = (sp.damage || []).reduce((s, d) => s + Dice.average(d.dice), 0) || 8;
+        const aim = AI.bestAim(E, c, sp.area, c, avg, sp.save || 'dex', (c.spellcasting || {}).dc || 13, sp.damage && sp.damage[0] ? sp.damage[0].type : null);
+        if (!aim.aim || (sp.area.origin === 'point' && G.distToCellFt(c, Math.floor(aim.aim.x), Math.floor(aim.aim.y)) > sp.range)) continue;
+        const r = await E.useFeature(c, f.id, { aim: aim.aim });
+        if (r && r.ok !== false) {
+          await AI.wait(opts);
+          return true;
+        }
+      } else {
+        const o = AI.enemies(E, c).filter((x) => G.distFt(c, x) <= (sp.range || 60)).sort((a, b) => a.hp - b.hp)[0];
+        if (!o) continue;
+        const r = await E.useFeature(c, f.id, { target: o });
+        if (r && r.ok !== false) {
+          await AI.wait(opts);
+          return true;
+        }
+      }
+    }
+    return false;
   };
 
   /* Особые действия: лечение касанием, цели по выбору, ужасающий вид, телепортация */
@@ -423,6 +494,9 @@
         }
       }
     }
+
+    // Повторяемые заклинания (Призыв молнии) и оружие из заклинаний действием
+    if (t.actions > 0 && (await AI.useRecastAndWeapons(E, c, 'action', opts))) return;
 
     // Прочие особые действия монстров
     if (t.actions > 0 && c.kind !== 'pc') {
@@ -633,6 +707,8 @@
       if (bite && o) await E.doAttack(c, 'bite', o, { bonus: true });
       return;
     }
+    // Повторяемые заклинания и оружие из заклинаний бонусным действием
+    if (await AI.useRecastAndWeapons(E, c, 'bonus', opts)) return;
     // Божественное оружие
     if (E.hasEff(c, 'spiritualWeapon') && !t.bonusSpell) {
       const o = AI.enemies(E, c).filter((x) => G.distFt(c, x) <= 60).sort((a, b) => a.hp - b.hp)[0];
