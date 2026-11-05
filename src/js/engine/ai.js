@@ -32,19 +32,24 @@
     const mode = E.attackMode(c, tgt, atk, isRanged, dist).mode;
     const dmg = isRanged && atk.rangedDmg ? atk.rangedDmg : atk.dmg;
     let avg = avgList(dmg);
-    if (atk.onHit && atk.onHit.damage) avg += avgList(atk.onHit.damage) * 0.75;
-    if (atk.onHit && atk.onHit.condition === 'paralyzed') avg += 6;
-    if (atk.onHit && atk.onHit.condition === 'restrained') avg += 4;
+    for (const oh of atk.onHit || []) {
+      if (oh.damage) avg += avgList(oh.damage) * 0.75;
+      if (oh.condition === 'paralyzed' || oh.condition === 'stunned') avg += 6;
+      if (oh.condition === 'restrained' || oh.condition === 'grappled') avg += 3;
+      if (oh.condition === 'poisoned' || oh.condition === 'prone') avg += 2;
+    }
     return hitChance(atk.toHit, E.acOf(tgt), mode) * avg;
   };
 
   /* Наборы атак для действия «Атака»: варианты мультиатаки или одиночные атаки */
-  AI.attackSets = function (c) {
+  AI.attackSets = function (c, E) {
+    E = E || AI._E;
     const sets = [];
     const usable = (id) => {
       const a = c.attacks.find((x) => x.id === id);
       if (a) return !(a.recharge && c.recharge && !c.recharge[a.id]);
-      return !!c.specials.find((s) => s.id === id);
+      const s = c.specials.find((x) => x.id === id);
+      return !!s && E.specialReady(c, s);
     };
     if (c.multiattack) for (const opt of c.multiattack) if (opt.every(usable)) sets.push(opt.slice());
     for (const a of c.attacks) {
@@ -158,16 +163,18 @@
       let slot = 0;
       if (s.level > 0) {
         slot = E.lowestSlot(c, s.level);
+        if (!slot && E.usesInnate(c, s, 0)) slot = 'innate';
         if (!slot) continue;
       }
       if (E.castCheck(c, s, slot)) continue;
-      out.push({ spell: s, slot });
+      out.push({ spell: s, slot, lvl: slot === 'innate' ? s.level : slot });
     }
     return out;
   };
 
   AI.evalSpell = function (E, c, s, slot) {
     const sc = c.spellcasting;
+    if (slot === 'innate') slot = s.level;
     const enemies = AI.enemies(E, c).filter((o) => G.distFt(c, o) <= Math.max(s.range, 5) && (s.range <= 5 || G.hasLOS(E.B.map, c, o)));
     if (s.kind === 'attack') {
       let n = 1;
@@ -190,14 +197,34 @@
       return { ev: darts * Dice.average(s.damage[0].dice), targets: [o.uid] };
     }
     if (s.kind === 'save' && s.target !== 'area') {
-      let best = null;
-      for (const o of enemies) {
+      const count = (s.count || 1) + (s.upcast && s.upcast.targets ? Math.max(0, slot - s.level) : 0);
+      const scored = enemies.map((o) => {
         const avg = s.damage.reduce((sum, d) => sum + Dice.average(E.spellDice(c, s, slot, d.dice)), 0);
         const fc = failChance(o.saves[s.save] || 0, sc.dc);
-        const ev = avg * (fc + (s.half ? (1 - fc) * 0.5 : 0));
-        if (!best || ev > best.ev) best = { ev, targets: [o.uid] };
-      }
-      return best;
+        let ev = avg * (fc + (s.half ? (1 - fc) * 0.5 : 0));
+        if (s.noKill) ev = Math.min(ev, Math.max(0, o.hp - 1));
+        return { o, ev };
+      }).sort((a, b) => b.ev - a.ev).slice(0, count);
+      if (!scored.length) return null;
+      return { ev: scored.reduce((a, x) => a + x.ev, 0), targets: scored.map((x) => x.o.uid) };
+    }
+    if (s.kind === 'kill' || s.kind === 'pwstun') {
+      const cand = enemies.filter((o) => o.hp <= (s.threshold || 100) && !(s.kind === 'pwstun' && E.hasCond(o, 'stunned'))).sort((a, b) => b.hp - a.hp);
+      if (!cand.length) return null;
+      return { ev: s.kind === 'kill' ? cand[0].hp * 1.2 : 12 + cand[0].hp * 0.2, targets: [cand[0].uid] };
+    }
+    if (s.kind === 'banish') {
+      if (c.concentration || !enemies.length) return null;
+      const o = enemies.slice().sort((a, b) => b.hp - a.hp)[0];
+      if (enemies.length < 2) return null;
+      return { ev: 6 + o.hp * 0.15 * failChance(o.saves.cha || 0, sc.dc), targets: [o.uid] };
+    }
+    if (s.kind === 'control' && s.target === 'area' && s.area) {
+      if (c.concentration) return null;
+      const aim = AI.bestAim(E, c, s.area, c, 12, s.save, sc.dc, null);
+      if (!aim.aim || aim.hits < 2) return null;
+      if (s.area.origin === 'point' && G.distToCellFt(c, Math.floor(aim.aim.x), Math.floor(aim.aim.y)) > s.range) return null;
+      return { ev: aim.score * 0.8, point: aim.aim };
     }
     if (s.kind === 'save' && s.target === 'area') {
       const avg = s.damage.reduce((sum, d) => sum + Dice.average(E.spellDice(c, s, slot, d.dice)), 0);
@@ -223,12 +250,70 @@
       hurt.sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp);
       return { ev: 12 + (hurt[0].hp <= 0 ? 15 : 0), targets: hurt.slice(0, s.count || 1).map((o) => o.uid), heal: true };
     }
+    if (s.kind === 'buff' && s.target === 'self' && s.effect && !E.hasEff(c, s.effect)) {
+      if (s.concentration && c.concentration) return null;
+      if (s.effect === 'falseLife') return c.tempHp ? null : { ev: 5, targets: [] };
+      if (['divineFavor', 'thunderousSmite'].includes(s.effect) && AI.enemies(E, c).some((o) => G.distFt(c, o) <= 10)) return { ev: 6, targets: [] };
+      return null;
+    }
+    if (s.kind === 'buff' && ['haste', 'stoneskin', 'barkskin', 'greaterInvisibility', 'heroism'].includes(s.effect)) {
+      if (c.concentration) return null;
+      if (!AI.enemies(E, c).some((o) => G.distFt(c, o) <= 60)) return null;
+      const al = AI.allies(E, c).filter((o) => o.hp > 0 && G.distFt(c, o) <= Math.max(5, s.range) && !E.hasEff(o, s.effect)).sort((a, b) => b.maxHp - a.maxHp);
+      if (!al.length) return null;
+      return { ev: 8, targets: [al[0].uid] };
+    }
     if (s.kind === 'buff' && s.id === 'bless') {
       if (c.concentration) return null;
       const al = AI.allies(E, c).filter((o) => o.hp > 0 && G.distFt(c, o) <= 30).slice(0, 3);
       return { ev: 3 * al.length, targets: al.map((o) => o.uid) };
     }
     return null;
+  };
+
+  /* Особые действия: лечение касанием, цели по выбору, ужасающий вид, телепортация */
+  AI.monsterSpecials = async function (E, c, opts) {
+    const t = E.B.turn;
+    const enemies = AI.enemies(E, c);
+    const weaponBest = AI.bestWeaponEV(E, c);
+    for (const s of c.specials) {
+      if (!E.specialReady(c, s) || t.actions <= 0) continue;
+      const inMulti = c.multiattack && c.multiattack.some((o) => o.includes(s.id));
+      if (s.type === 'healTouch') {
+        const hurt = AI.allies(E, c).filter((o) => o.hp > 0 && o.hp <= o.maxHp * 0.4 && G.distFt(c, o) <= 5).sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp)[0];
+        if (hurt) {
+          const r = await E.useFeature(c, 'sp:' + s.id, { target: hurt });
+          if (r && r.ok !== false) {
+            await AI.wait(opts);
+            return true;
+          }
+        }
+      } else if (s.type === 'targets') {
+        const n = enemies.filter((o) => G.distFt(c, o) <= (s.range || 60) && G.hasLOS(E.B.map, c, o)).length;
+        const ev = Math.min(n, s.count || 1) * avgList(s.dmg) * 0.7;
+        if (n && ev > weaponBest) {
+          await E.useFeature(c, 'sp:' + s.id, {});
+          await AI.wait(opts);
+          return true;
+        }
+      } else if (s.type === 'aoeCondition' && !inMulti) {
+        const imm = E.B.fpImmune[c.uid] || {};
+        const n = enemies.filter((o) => G.distFt(c, o) <= s.range && !imm[o.uid] && !E.hasCond(o, s.condition) && !(s.notTypes && s.notTypes.includes(o.type))).length;
+        if (n >= 2 || (n >= 1 && weaponBest < 4)) {
+          await E.useFeature(c, 'sp:' + s.id, {});
+          await AI.wait(opts);
+          return true;
+        }
+      } else if (s.type === 'gaze' && !inMulti) {
+        const cand = enemies.filter((o) => G.distFt(c, o) <= s.range && G.hasLOS(E.B.map, c, o) && (s.dropTo0 ? E.hasCond(o, 'frightened') : s.condition && !E.hasCond(o, s.condition)));
+        if (cand.length && (s.dropTo0 || weaponBest < 8)) {
+          await E.useFeature(c, 'sp:' + s.id, { target: cand.sort((a, b) => b.hp - a.hp)[0] });
+          await AI.wait(opts);
+          return true;
+        }
+      }
+    }
+    return false;
   };
 
   /* ---------- Главная функция хода ---------- */
@@ -248,6 +333,16 @@
         await AI.wait(opts);
       }
       if (!AI.enemies(E, c).length) return await E.endTurn();
+      // Телепортация к врагу, если до него не дойти
+      const tp = c.specials && c.specials.find((s) => s.type === 'teleport' && (s.range || 0) <= 500 && E.specialReady(c, s));
+      if (tp && t.bonus !== undefined) {
+        const far = !AI.enemies(E, c).some((o) => G.distFt(c, o) <= E.speedOf(c) + E.reachOf(c));
+        const dest = far && E.teleportDest(c, tp.range || 30);
+        if (dest && c.multiattack == null) {
+          await E.useFeature(c, 'sp:' + tp.id, { point: dest });
+          await AI.wait(opts);
+        }
+      }
 
       await AI.actionPhase(E, c, opts);
       if (B.phase !== 'combat') return;
@@ -289,7 +384,7 @@
 
     // Площадные способности (дыхание)
     for (const s of c.specials) {
-      if (s.type !== 'area' || (c.recharge && c.recharge[s.id] === false) || t.actions <= 0) continue;
+      if (s.type !== 'area' || !E.specialReady(c, s) || t.actions <= 0) continue;
       const avg = avgList(s.dmg);
       const dt = s.dmg && s.dmg[0] ? s.dmg[0].type : null;
       let best = AI.bestAim(E, c, s.area, c, avg, s.save, s.dc, dt);
@@ -318,12 +413,19 @@
           await AI.wait(opts);
           best = AI.bestAim(E, c, s.area, c, avg, s.save, s.dc, dt);
         }
+        if (best.aim && s.area.origin === 'point' && s.range && G.distToCellFt(c, Math.floor(best.aim.x), Math.floor(best.aim.y)) > s.range) best.aim = null;
         if (best.aim && !c.dead && c.hp > 0) {
           await E.doAreaSpecial(c, s.id, best.aim);
           await AI.wait(opts);
           return;
         }
       }
+    }
+
+    // Прочие особые действия монстров
+    if (t.actions > 0 && c.kind !== 'pc') {
+      const used = await AI.monsterSpecials(E, c, opts);
+      if (used) return;
     }
 
     // Заклинания
@@ -355,7 +457,7 @@
   AI.bestWeaponEV = function (E, c) {
     let best = 0;
     for (const o of AI.enemies(E, c)) {
-      for (const set of AI.attackSets(c)) {
+      for (const set of AI.attackSets(c, E)) {
         best = Math.max(best, AI.setEV(E, c, set, o, false) * 0.9, AI.setEV(E, c, set, o, true));
       }
     }
@@ -368,7 +470,7 @@
     const enemies = AI.enemies(E, c);
     const fly = E.canFly(c);
     const M = G.reach(B, c, 200, { fly, avoidHazards: true });
-    const sets = AI.attackSets(c);
+    const sets = AI.attackSets(c, E);
     if (!sets.length) return;
 
     let plan = null;
@@ -485,7 +587,7 @@
           tgt = cands[0] || null;
         }
         // Тираннозавр: хвост по другой цели
-        if (c.refId === 'trex' && id === 'tail' && usedTargets.bite && tgt && tgt.uid === usedTargets.bite) {
+        if ((c.refId === 'trex' || c.refId === 'tyrannosaurus-rex') && id === 'tail' && usedTargets.bite && tgt && tgt.uid === usedTargets.bite) {
           const alt = AI.enemies(E, c).filter((o) => o.uid !== tgt.uid && E.attackInfo(c, atk, o).ok)[0];
           tgt = alt || null;
         }

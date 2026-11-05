@@ -5,7 +5,7 @@ const path = require('path');
 
 const files = [
   'core/util.js', 'core/dice.js', 'data/rules.js', 'data/equipment.js', 'data/races.js', 'data/classes.js',
-  'data/spells.js', 'data/monsters.js', 'data/tiles.js', 'data/maps.js',
+  'data/spells.js', 'data/srd-monsters.js', 'data/monsters.js', 'data/tiles.js', 'data/maps.js',
   'engine/character.js', 'engine/grid.js', 'engine/combat.js', 'engine/ai.js',
 ];
 for (const f of files) require(path.join(__dirname, '..', 'src', 'js', f));
@@ -104,15 +104,23 @@ async function runBattle(seed, heroes, monsters, mapId) {
     B.combatants.push(c);
   }
   const E = new D.Combat.Engine(B, {});
-  await E.beginCombat();
-  let guard = 0;
-  while (B.phase === 'combat' && guard < 400) {
-    const c = E.current();
-    await D.AI.takeTurn(E, c, { delay: 0 });
-    guard++;
+  const errors = [];
+  const origErr = console.error;
+  console.error = (...a) => errors.push(a.map((x) => (x && x.stack) || String(x)).join(' '));
+  try {
+    await E.beginCombat();
+    let guard = 0;
+    while (B.phase === 'combat' && guard < 400) {
+      const c = E.current();
+      await D.AI.takeTurn(E, c, { delay: 0 });
+      guard++;
+    }
+    if (errors.length) throw new Error('Ошибка в бою (' + monsters.join(',') + '): ' + errors[0]);
+    return { B, E, guard };
+  } finally {
+    console.error = origErr;
+    D.Dice.setRng(null);
   }
-  D.Dice.setRng(null);
-  return { B, E, guard };
 }
 
 test('бой ИИ против ИИ доходит до конца', async () => {
@@ -137,6 +145,59 @@ test('все монстры могут сражаться', async () => {
     const { B } = await runBattle(77, heroes, [m.id], 'preset_field');
     assert.ok(['ended', 'combat'].includes(B.phase), m.id);
   }
+});
+
+test('все подклассы до 20 уровня: расчёт и бой', async () => {
+  for (const cls of D.CLASSES) {
+    for (const sub of cls.subclasses) {
+      for (const lv of [3, 11, 20]) {
+        const ch = makeHero(cls.id, 'human', lv, { subclass: sub.id });
+        const s = D.Char.compute(ch);
+        assert.ok(s.hp > 0 && s.ac >= 10, cls.id + '/' + sub.id);
+        const c = D.Char.toCombatant(ch, 'heroes');
+        assert.ok(c.attacks.length > 0);
+      }
+    }
+  }
+  const party = [];
+  for (const cls of D.CLASSES) for (const sub of cls.subclasses) party.push(makeHero(cls.id, 'human', 20, { subclass: sub.id }));
+  for (let i = 0; i < party.length; i += 4) {
+    const { B } = await runBattle(100 + i, party.slice(i, i + 4), ['adult-red-dragon', 'lich', 'vampire'], 'preset_field');
+    assert.ok(['ended', 'combat'].includes(B.phase));
+  }
+});
+
+test('легендарные действия и сопротивление', async () => {
+  const heroes = [makeHero('fighter', 'human', 12), makeHero('paladin', 'human', 12), makeHero('wizard', 'elf', 12), makeHero('cleric', 'dwarf', 12)];
+  const { B } = await runBattle(9, heroes, ['adult-blue-dragon'], 'preset_field');
+  assert.ok(B.log.some((l) => l.t.includes('легендарное действие')), 'не было легендарных действий');
+});
+
+test('дикий облик друида', async () => {
+  const map = D.PRESET_MAPS.find((m) => m.id === 'preset_field');
+  const B = D.Combat.newBattle(map);
+  const dr = D.Char.toCombatant(makeHero('druid', 'human', 6, { subclass: 'moon' }), 'heroes');
+  dr.x = 2;
+  dr.y = 2;
+  const g = D.Combat.fromMonster(D.monster('goblin'), 'enemies');
+  g.x = 10;
+  g.y = 2;
+  B.combatants.push(dr, g);
+  const E = new D.Combat.Engine(B, {});
+  dr.initiative = 30;
+  g.initiative = 1;
+  await E.beginCombat();
+  const forms = E.wildShapeForms(dr);
+  assert.ok(forms.length > 0);
+  const bear = forms.find((m) => m.id === 'brown-bear') || forms[0];
+  const r = await E.useFeature(dr, 'wildShape', { form: bear.id });
+  assert.ok(r.ok, r.reason);
+  assert.ok(dr.beast);
+  assert.strictEqual(dr.maxHp, D.monster(bear.id).hp);
+  const origHp = dr.beast.orig.hp;
+  await E.applyDamage(dr, [{ amount: dr.hp + 3, type: 'slashing' }], g, {});
+  assert.ok(!dr.beast, 'облик должен спасть');
+  assert.strictEqual(dr.hp, origHp - 3);
 });
 
 test('заклинания игроков применяются', async () => {
