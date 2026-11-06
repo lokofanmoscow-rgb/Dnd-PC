@@ -40,6 +40,13 @@
     deleteBattle(id) {
       U.store.set('battles', Store.battles().filter((x) => x.id !== id));
     },
+    autosave: () => U.store.get('autosave', null),
+    setAutosave(B) {
+      U.store.set('autosave', { name: B.name, date: Date.now(), round: B.round, state: B });
+    },
+    clearAutosave() {
+      U.store.set('autosave', null);
+    },
     settings() {
       return Object.assign({ aiSpeed: 'normal', dice: 'normal', enemyHp: true, rollMonsterHp: false, autoAI: true, grid: true }, U.store.get('settings', {}));
     },
@@ -181,29 +188,48 @@
     return f;
   };
 
-  /* Иконка game-icons.net (SVG) или эмодзи/текст для своих монстров */
-  const SVGNS = 'http://www.w3.org/2000/svg';
+  /* Иконка game-icons.net: один раз рисуется в растровую картинку и кэшируется.
+     Растровые <img> дёшевы для видеокарты даже в длинных списках (векторные контуры
+     в сотнях строк бестиария перегружали отрисовку на слабых ПК). */
+  const ICON_URLS = {};
+  UI.iconURL = function (key, color, px) {
+    const d = key && D.ICONS && D.ICONS[key];
+    if (!d) return null;
+    color = color || '#e6d7b8';
+    px = px || 96;
+    const k = key + '|' + color + '|' + px;
+    if (ICON_URLS[k]) return ICON_URLS[k];
+    const cv = document.createElement('canvas');
+    cv.width = px;
+    cv.height = px;
+    const cx = cv.getContext('2d');
+    cx.scale(px / 512, px / 512);
+    cx.fillStyle = color;
+    cx.fill(D.iconPath ? D.iconPath(key) : new Path2D(d));
+    let url = cv.toDataURL('image/png');
+    // Короткая blob-ссылка вместо длинной data-строки в каждом <img>
+    try {
+      const bin = atob(url.split(',')[1]);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      url = URL.createObjectURL(new Blob([arr], { type: 'image/png' }));
+    } catch (e) {
+      /* остаётся data-ссылка */
+    }
+    ICON_URLS[k] = url;
+    return url;
+  };
   UI.icon = function (key, opts) {
     opts = opts || {};
-    const d = key && D.ICONS && D.ICONS[key];
-    if (!d) return el('span', { class: 'ico-emoji' + (opts.cls ? ' ' + opts.cls : '') }, key || '?');
-    const svg = document.createElementNS(SVGNS, 'svg');
-    svg.setAttribute('viewBox', '0 0 512 512');
-    svg.setAttribute('class', 'gi' + (opts.cls ? ' ' + opts.cls : ''));
+    const url = UI.iconURL(key, opts.color, opts.px);
+    if (!url) return el('span', { class: 'ico-emoji' + (opts.cls ? ' ' + opts.cls : '') }, key || '?');
+    const img = el('img', { class: 'gi' + (opts.cls ? ' ' + opts.cls : ''), src: url, alt: '', draggable: 'false', decoding: 'async' });
     if (opts.size) {
-      svg.setAttribute('width', opts.size);
-      svg.setAttribute('height', opts.size);
+      img.style.width = opts.size + 'px';
+      img.style.height = opts.size + 'px';
     }
-    const p = document.createElementNS(SVGNS, 'path');
-    p.setAttribute('d', d);
-    p.setAttribute('fill', opts.color || 'currentColor');
-    svg.appendChild(p);
-    if (opts.title) {
-      const t = document.createElementNS(SVGNS, 'title');
-      t.textContent = opts.title;
-      svg.appendChild(t);
-    }
-    return svg;
+    if (opts.title) img.title = opts.title;
+    return img;
   };
 
   /* Выбор иконки из набора game-icons.net */
@@ -289,11 +315,13 @@
     render(rootEl) {
       const bg = el('canvas', { class: 'bg' });
       const saves = Store.battles();
+      const auto = Store.autosave();
       const card = el('div', { class: 'menu-card' },
-        el('div', { class: 'logo' }, UI.icon('dragon-head')),
+        el('div', { class: 'logo' }, UI.icon('dragon-head', { color: '#e2563b', px: 168 })),
         el('h1', {}, 'Подземелья и Драконы'),
         el('div', { class: 'subtitle' }, 'Тактический боевой стол · 5-я редакция'),
         el('div', { class: 'menu-buttons' },
+          auto && auto.state ? el('button', { class: 'gold', title: 'Бой сохраняется автоматически во время игры', onclick: () => App.show('battle', { load: auto.state }) }, '▶  Продолжить бой: ' + auto.name + ' (раунд ' + auto.round + ')') : null,
           el('button', { class: 'primary', onclick: () => App.show('battle', {}) }, '⚔️  Новый бой'),
           el('button', { disabled: !saves.length, onclick: () => App.loadBattleDialog() }, '📂  Загрузить бой' + (saves.length ? ' (' + saves.length + ')' : '')),
           el('button', { onclick: () => App.show('roster') }, '🧙  Персонажи'),

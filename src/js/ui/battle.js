@@ -110,10 +110,16 @@
           const v = await UI.prompt(q, def, { type: 'number', min, max });
           return v == null || isNaN(v) ? 0 : U.clamp(Math.round(v), min, max);
         },
-        changed: () => scheduleRefresh(),
+        changed: () => {
+          scheduleRefresh();
+          scheduleAutosave();
+        },
         animateStep: (c, fx, fy, tx, ty) => board.tweenStep(c, fx, fy, tx, ty, isAI(c) && aiFast() ? 60 : 110),
         flashCells: (cells, color) => board.flashCells(cells, color, 650),
-        ended: (result) => setTimeout(() => showEnd(result), 400),
+        ended: (result) => {
+          Store.clearAutosave();
+          setTimeout(() => showEnd(result), 400);
+        },
       };
       const E = new D.Combat.Engine(B, hooks);
       const cur = () => E.current();
@@ -127,6 +133,16 @@
       }
       for (const l of B.log) logEl.appendChild(el('div', { class: l.c, html: l.t }));
       setTimeout(() => (logEl.scrollTop = logEl.scrollHeight), 50);
+
+      /* ---------- Автосохранение идущего боя (на случай сбоя) ---------- */
+      let autosaveTimer = null;
+      function scheduleAutosave() {
+        if (autosaveTimer || B.phase !== 'combat') return;
+        autosaveTimer = setTimeout(() => {
+          autosaveTimer = null;
+          if (B.phase === 'combat') Store.setAutosave(B);
+        }, 4000);
+      }
 
       /* ---------- Обновление ---------- */
       let refreshPending = false;
@@ -1512,6 +1528,9 @@
 
       self.destroy = () => {
         destroyed = true;
+        if (autosaveTimer) clearTimeout(autosaveTimer);
+        if (B.phase === 'combat') Store.setAutosave(B);
+        else Store.clearAutosave();
         board.destroy();
         document.removeEventListener('keydown', onKey);
       };

@@ -212,7 +212,7 @@
 
   D.renderStatblock = function (m) {
     const sb = el('div', { class: 'statblock' });
-    sb.appendChild(el('div', { class: 'token' }, D.UI.icon(m.icon)));
+    sb.appendChild(el('div', { class: 'token' }, D.UI.icon(m.icon, { color: '#9a6a30', px: 128 })));
     sb.appendChild(el('h2', {}, m.name));
     sb.appendChild(el('div', { class: 'en' }, m.en || ''));
     sb.appendChild(el('div', { class: 'type' }, R.SIZES[m.size].name + ' ' + (R.CREATURE_TYPES[m.type] || m.type).toLowerCase() + (m.subtype ? ' (' + m.subtype + ')' : '') + ', ' + (m.align || 'без мировоззрения')));
@@ -291,15 +291,25 @@
         return true;
       }).sort((a, b) => R.crValue(a.cr) - R.crValue(b.cr) || a.name.localeCompare(b.name, 'ru'));
     }
+    let itemEls = new Map();
+    function markSel() {
+      for (const [id, node] of itemEls) node.classList.toggle('sel', id === state.sel);
+    }
     function drawList() {
       U.clear(listEl);
+      itemEls = new Map();
+      const frag = document.createDocumentFragment();
       for (const m of filtered()) {
-        listEl.appendChild(el('div', { class: 'list-item' + (m.id === state.sel ? ' sel' : ''), onclick: () => { state.sel = m.id; drawList(); drawDetail(); }, ondblclick: () => opts.onPick && opts.onPick(m) },
-          el('span', { class: 'ico' }, D.UI.icon(m.icon)), el('div', { class: 'grow' }, el('div', {}, m.name), el('div', { class: 'muted', style: { fontSize: '11px' } }, R.CREATURE_TYPES[m.type] + (m.custom ? ' · свой' : ''))), el('span', { class: 'cr' }, 'ПО ' + m.cr)));
+        const node = el('div', { class: 'list-item' + (m.id === state.sel ? ' sel' : ''), onclick: () => { if (state.sel === m.id) return; state.sel = m.id; markSel(); drawDetail(); }, ondblclick: () => opts.onPick && opts.onPick(m) },
+          el('span', { class: 'ico' }, D.UI.icon(m.icon, { px: 48 })), el('div', { class: 'grow' }, el('div', {}, m.name), el('div', { class: 'muted', style: { fontSize: '11px' } }, R.CREATURE_TYPES[m.type] + (m.custom ? ' · свой' : ''))), el('span', { class: 'cr' }, 'ПО ' + m.cr));
+        itemEls.set(m.id, node);
+        frag.appendChild(node);
       }
+      listEl.appendChild(frag);
     }
     function drawDetail() {
       U.clear(detail);
+      detail.scrollTop = 0;
       const m = D.monster(state.sel);
       if (!m) return;
       if (opts.actions) detail.appendChild(opts.actions(m));
@@ -312,7 +322,7 @@
       el: el('div', { class: 'body', style: { minHeight: 0 } }, left, el('div', { style: { display: 'flex', flex: 1, minWidth: 0 } }, detail)),
       get: () => D.monster(state.sel),
       redraw: drawDetail,
-      select: (id) => { state.sel = id; drawList(); drawDetail(); },
+      select: (id) => { state.sel = id; if (itemEls.has(id)) markSel(); else drawList(); drawDetail(); },
       refresh: () => { drawList(); drawDetail(); },
     };
   };

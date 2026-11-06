@@ -76,7 +76,7 @@
     const arts = (ch.artifacts || []).map((id) => id && D.EQUIP.item(id)).filter(Boolean);
     if (arts.length) {
       sheet.appendChild(el('div', { class: 'section-title' }, 'Артефакты'));
-      for (const it of arts) sheet.appendChild(el('div', { class: 'feat row', style: { alignItems: 'flex-start' } }, UI.icon(it.icon, { cls: 'feat-ico' }), el('div', {}, el('b', {}, it.name + '. '), it.desc || '')));
+      for (const it of arts) sheet.appendChild(el('div', { class: 'feat row', style: { alignItems: 'flex-start' } }, UI.icon(it.icon, { cls: 'feat-ico', color: '#cdb48a', px: 52 }), el('div', {}, el('b', {}, it.name + '. '), it.desc || '')));
     }
     if (ch.potions) sheet.appendChild(el('div', { class: 'feat' }, el('b', {}, 'Снаряжение. '), 'Зелья лечения: ' + ch.potions + ' (2к4+2).'));
     return sheet;
@@ -246,7 +246,7 @@
 
   /* Выбор из плиток с иконками (раса, класс) */
   function iconGrid(items, value, onPick) {
-    return el('div', { class: 'icon-grid' }, items.map((it) => el('div', { class: 'opt' + (it.value === value ? ' sel' : ''), title: it.title || '', onclick: () => onPick(it.value) }, UI.icon(it.icon), el('span', {}, it.label))));
+    return el('div', { class: 'icon-grid' }, items.map((it) => el('div', { class: 'opt' + (it.value === value ? ' sel' : ''), title: it.title || '', onclick: () => onPick(it.value) }, UI.icon(it.icon, { color: it.value === value ? '#ffd88a' : '#cdb48a', px: 80 }), el('span', {}, it.label))));
   }
 
   /* ---------- Случайная партия ---------- */
@@ -646,7 +646,7 @@
           const it = ch.artifacts[i] && D.EQUIP.item(ch.artifacts[i]);
           eq.appendChild(el('label', {}, 'Артефакт ' + (i + 1)));
           eq.appendChild(el('div', { class: 'row' },
-            it ? UI.icon(it.icon, { cls: 'eq-ico' }) : null,
+            it ? UI.icon(it.icon, { cls: 'eq-ico', color: '#cdb48a', px: 44 }) : null,
             U.select(itemOpts, ch.artifacts[i], async (v) => {
               if (v === NEW) {
                 const n = await D.itemEditor(null);

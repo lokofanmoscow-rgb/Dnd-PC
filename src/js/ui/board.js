@@ -8,6 +8,29 @@
     return PATHS[key] || (PATHS[key] = new Path2D(D.ICONS[key]));
   }
   D.iconPath = iconPath;
+  /* Готовая растровая иконка с тенью для жетонов: рисуется один раз, затем только копируется */
+  const BITMAPS = {};
+  function iconBitmap(key, color) {
+    const k = key + '|' + color;
+    if (BITMAPS[k]) return BITMAPS[k];
+    const p = iconPath(key);
+    if (!p || typeof document === 'undefined') return null;
+    const px = 144;
+    const cv = document.createElement('canvas');
+    cv.width = px;
+    cv.height = px;
+    const cx = cv.getContext('2d');
+    const k2 = (px * 0.86) / 512;
+    cx.translate(px * 0.07, px * 0.06);
+    cx.scale(k2, k2);
+    cx.shadowColor = 'rgba(0,0,0,0.85)';
+    cx.shadowBlur = 10;
+    cx.shadowOffsetY = 3;
+    cx.fillStyle = color;
+    cx.fill(p);
+    BITMAPS[k] = cv;
+    return cv;
+  }
   const U = D.U;
 
   const BASE = 48;
@@ -507,9 +530,12 @@
     this._resize();
     this.ro = new ResizeObserver(() => this._resize());
     this.ro.observe(wrap);
+    this.fc = 0;
     const loop = () => {
       if (!this.running) return;
-      this.draw();
+      // Когда на доске ничего не анимируется, перерисовываем через кадр (≈30 к/с) — меньше нагрузки на ПК
+      const busy = this.floats.length || this.flash || Object.keys(this.tweens).length;
+      if (busy || (++this.fc & 1) === 0) this.draw();
       this.raf = requestAnimationFrame(loop);
     };
     this.raf = requestAnimationFrame(loop);
@@ -949,16 +975,11 @@
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.fill();
-      ctx.save();
-      const k = (r * 1.42) / 512;
-      ctx.translate(cx - 256 * k, cy - 256 * k);
-      ctx.scale(k, k);
-      ctx.shadowColor = 'rgba(0,0,0,0.85)';
-      ctx.shadowBlur = Math.max(2, r * 0.12);
-      ctx.shadowOffsetY = Math.max(1, r * 0.04);
-      ctx.fillStyle = c.dead || down ? '#7d7770' : c.side === 'enemies' ? '#f0d9c2' : '#efe6d2';
-      ctx.fill(iconPath(c.icon));
-      ctx.restore();
+      const bmp = iconBitmap(c.icon, c.dead || down ? '#7d7770' : c.side === 'enemies' ? '#f0d9c2' : '#efe6d2');
+      if (bmp) {
+        const sz = r * 1.65;
+        ctx.drawImage(bmp, cx - sz / 2, cy - sz / 2, sz, sz);
+      }
     } else {
       ctx.font = Math.round(r * 1.15) + 'px ' + "'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif";
       ctx.textAlign = 'center';
