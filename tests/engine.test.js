@@ -413,6 +413,92 @@ test('контрзаклинание, призыв, превращение и з
   D.Dice.setRng(null);
 });
 
+test('вода: рыбы плавают только по воде и задыхаются на суше, остальные в воде без действий', async () => {
+  D.Dice.setRng(seeded(3));
+  const map = D.PRESET_MAPS.find((m) => m.id === 'preset_ship');
+  assert.ok(map, 'нет карты с кораблём');
+  assert.ok(map.cells.filter((c) => c === 'deep').length > map.w * map.h * 0.6, 'карта должна быть в основном глубокой водой');
+  assert.ok(map.cells.filter((c) => c === 'wood').length > 100, 'на карте должна быть палуба');
+  const B = D.Combat.newBattle(map);
+  const shark = D.Combat.fromMonster(D.monster('hunter-shark'), 'enemies');
+  shark.x = 15;
+  shark.y = 3; // глубокая вода
+  const fish = D.Combat.fromMonster(D.monster('reef-shark'), 'enemies');
+  fish.x = 18;
+  fish.y = 13; // поставили на палубу
+  const hero = D.Char.toCombatant(makeHero('fighter', 'human', 5), 'heroes');
+  hero.x = 3;
+  hero.y = 8; // в воде
+  const croc = D.Combat.fromMonster(D.monster('crocodile'), 'enemies');
+  croc.x = 30;
+  croc.y = 5;
+  B.combatants.push(shark, fish, hero, croc);
+  assert.ok(D.Grid.isAquatic(shark) && !D.Grid.isAquatic(croc));
+  // Перемещение акулы только по воде
+  assert.ok(!D.Grid.canStand(B, shark, 20, 14, {}), 'акула не может на палубу');
+  assert.ok(D.Grid.canStand(B, shark, 15, 4, {}), 'акула плавает по глубокой воде');
+  assert.ok(D.Grid.canStand(B, shark, 20, 14, { placing: true }), 'при расстановке рыбу можно поставить на сушу');
+  const E = new D.Combat.Engine(B, {});
+  shark.initiative = 30;
+  fish.initiative = 20;
+  hero.initiative = 10;
+  croc.initiative = 5;
+  await E.beginCombat();
+  assert.strictEqual(E.current(), shark);
+  assert.strictEqual(B.turn.move, 40, 'скорость плавания акулы');
+  const M = E.reachable(shark);
+  assert.ok(M.size > 20, 'акула может плавать');
+  for (const rec of M.values()) assert.ok(D.tile(B.map.cells[rec.y * B.map.w + rec.x]).wet, 'путь акулы только по воде');
+  assert.ok(B.turn.actions === 1, 'акула в воде действует');
+  await E.endTurn();
+  // Рыба на палубе задыхается
+  assert.strictEqual(E.current(), fish);
+  assert.ok(fish.hp < fish.maxHp, 'рыба на суше должна получить урон');
+  assert.ok(B.log.some((l) => l.t.includes('задыхается')));
+  await E.endTurn();
+  // Герой в воде: без действий и бонусных действий
+  assert.strictEqual(E.current(), hero);
+  assert.strictEqual(B.turn.actions, 0);
+  assert.strictEqual(B.turn.bonus, false);
+  assert.ok(B.turn.move > 0, 'герой может плыть');
+  const r = await E.doAttack(hero, hero.attacks[0].id, shark);
+  assert.ok(!r.ok, 'в воде нельзя атаковать');
+  await E.endTurn();
+  // Крокодил умеет плавать — действует в воде
+  croc.x = 30;
+  croc.y = 6;
+  assert.strictEqual(E.current(), croc);
+  assert.strictEqual(B.turn.actions, 1);
+  // Правило «только глубокая вода»: мелководье не мешает
+  B.waterRule = 'deep';
+  assert.ok(!D.Grid.waterLocks(B, hero, 4, 5), 'мелководье при правиле «глубокая» не лишает действий');
+  assert.ok(D.Grid.waterLocks(B, hero, 3, 9), 'глубокая вода лишает действий');
+  B.waterRule = 'off';
+  assert.ok(!D.Grid.waterLocks(B, hero, 3, 9));
+  D.Dice.setRng(null);
+});
+
+test('вход в воду во время хода лишает действий', async () => {
+  const map = D.PRESET_MAPS.find((m) => m.id === 'preset_ship');
+  const B = D.Combat.newBattle(map);
+  const hero = D.Char.toCombatant(makeHero('rogue', 'human', 3), 'heroes');
+  hero.x = 20;
+  hero.y = 11; // край палубы
+  const g = D.Combat.fromMonster(D.monster('goblin'), 'enemies');
+  g.x = 28;
+  g.y = 14;
+  B.combatants.push(hero, g);
+  const E = new D.Combat.Engine(B, {});
+  hero.initiative = 30;
+  g.initiative = 1;
+  await E.beginCombat();
+  assert.strictEqual(B.turn.actions, 1);
+  await E.moveAlong(hero, [{ x: 20, y: 11 }, { x: 20, y: 10 }]);
+  assert.strictEqual(hero.y, 10);
+  assert.strictEqual(B.turn.actions, 0, 'в воде действие пропадает');
+  assert.strictEqual(B.turn.bonus, false);
+});
+
 test('заклинания игроков применяются', async () => {
   D.Dice.setRng(seeded(5));
   const map = D.PRESET_MAPS.find((m) => m.id === 'preset_field');

@@ -185,10 +185,62 @@
     return { id: 'preset_lair', name: 'Логово дракона', ...m };
   }
 
+  function ship() {
+    const W = 40;
+    const H = 30;
+    const m = blank(W, H, 'deep');
+    // Мели, риф и песчаный островок
+    const ring = (cx, cy, rx, ry, t) => {
+      for (let y = cy - ry; y <= cy + ry; y++)
+        for (let x = cx - rx; x <= cx + rx; x++) if (((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1) set(m, x, y, t);
+    };
+    ring(5, 5, 4, 3, 'water');
+    ring(5, 5, 2, 1, 'sand');
+    set(m, 4, 5, 'rock');
+    ring(34, 25, 3, 2, 'water');
+    [[33, 25], [35, 24], [34, 26]].forEach(([x, y]) => set(m, x, y, 'rock'));
+    ring(35, 4, 2, 2, 'water');
+    set(m, 35, 4, 'rock');
+    // Корпус корабля: корма слева, острый нос справа
+    for (let y = 11; y <= 18; y++) {
+      const dy = Math.abs(y - 14.5);
+      const bow = 30 - Math.round(dy * 1.6);
+      const stern = dy > 3 ? 10 : 9;
+      rect(m, stern, y, bow, y, 'wood');
+    }
+    set(m, 31, 14, 'wood');
+    set(m, 31, 15, 'wood');
+    // Каюта капитана на корме
+    for (let x = 9; x <= 13; x++) {
+      set(m, x, 11, 'wall');
+      set(m, x, 18, 'wall');
+    }
+    for (let y = 11; y <= 18; y++) {
+      set(m, 9, y, 'wall');
+      set(m, 13, y, 'wall');
+    }
+    rect(m, 10, 12, 12, 17, 'carpet');
+    set(m, 13, 14, 'door');
+    set(m, 13, 15, 'door');
+    set(m, 10, 12, 'chest');
+    set(m, 11, 16, 'table');
+    // Мачты, груз, люк в трюм, штурвал
+    set(m, 18, 14, 'pillar');
+    set(m, 25, 15, 'pillar');
+    [[16, 12], [17, 12], [16, 17], [21, 12], [22, 17], [23, 17], [27, 13]].forEach(([x, y]) => set(m, x, y, 'crate'));
+    [[19, 12], [20, 17], [24, 12], [27, 16]].forEach(([x, y]) => set(m, x, y, 'barrel'));
+    set(m, 21, 14, 'stairs');
+    set(m, 21, 15, 'stairs');
+    set(m, 14, 14, 'table');
+    // Шлюпка за кормой
+    rect(m, 3, 20, 5, 21, 'wood');
+    return { id: 'preset_ship', name: 'Корабль посреди океана', ...m };
+  }
+
   function field() {
     const m = blank(30, 20, 'grass');
     return { id: 'preset_field', name: 'Чистое поле', ...m };
   }
 
-  D.PRESET_MAPS = [tavern(), forest(), dungeon(), arena(), lair(), field()].map((m) => Object.assign(m, { preset: true }));
+  D.PRESET_MAPS = [tavern(), forest(), ship(), dungeon(), arena(), lair(), field()].map((m) => Object.assign(m, { preset: true }));
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -19,6 +19,7 @@
         const map = (params.mapId && Store.map(params.mapId)) || D.PRESET_MAPS[0];
         B = D.Combat.newBattle(map);
       }
+      B.waterRule = settings.waterRule || 'all';
       let destroyed = false;
 
       /* ---------- Каркас ---------- */
@@ -77,7 +78,7 @@
           const x = Math.floor(cell.x - (o.cells - 1) / 2);
           const y = Math.floor(cell.y - (o.cells - 1) / 2);
           board.ov.area = G.footprint(x, y, o.cells);
-          board.ov.areaColor = G.canStand(B, o, x, y, { fly: !!o.speed.fly }) && G.canEndAt(B, o, x, y) ? '#7cfc7c' : '#ff5050';
+          board.ov.areaColor = G.canStand(B, o, x, y, { fly: !!o.speed.fly, placing: true }) && G.canEndAt(B, o, x, y) ? '#7cfc7c' : '#ff5050';
         },
         onDragEnd: (cell) => {
           if (ui.mode === 'paint') return refresh();
@@ -87,7 +88,7 @@
           if (!o) return;
           const x = Math.floor(cell.x - (o.cells - 1) / 2);
           const y = Math.floor(cell.y - (o.cells - 1) / 2);
-          if (G.canStand(B, o, x, y, { fly: !!o.speed.fly }) && G.canEndAt(B, o, x, y)) {
+          if (G.canStand(B, o, x, y, { fly: !!o.speed.fly, placing: true }) && G.canEndAt(B, o, x, y)) {
             o.x = x;
             o.y = y;
           }
@@ -479,6 +480,8 @@
           if (!d || e.silent) continue;
           chips.appendChild(el('span', { class: 'chip ' + (['mockery', 'slowed', 'noReactions', 'hex', 'hunterMark', 'guidingBolt', 'reckless', 'helped', 'faerieFire', 'slowSpell', 'vowOfEnmity', 'acidArrow', 'entropicMark'].includes(e.id) ? 'bad' : 'good') }, d.icon + ' ' + d.name + (e.id === 'inspiration' ? ' (к' + e.value + ')' : '')));
         }
+        if (myTurn && t.flags && t.flags.swimming) chips.appendChild(el('span', { class: 'chip bad', title: 'Без скорости плавания в воде можно только перемещаться' }, '🌊 В воде: без действий'));
+        if (G.isAquatic(c) && c.x >= 0 && !G.allWet(B.map, c)) chips.appendChild(el('span', { class: 'chip bad', title: 'Водное существо на суше получает урон в начале каждого хода' }, '🐟 Задыхается на суше'));
         if (c.concentration) chips.appendChild(el('span', { class: 'chip spell', title: 'Нажмите, чтобы прекратить концентрацию', style: { cursor: 'pointer' }, onclick: () => { E.endConcentration(c, 'добровольно'); refresh(); } }, '🧠 ' + c.concentration.name + ' ✕'));
         if (chips.childNodes.length) card.appendChild(chips);
         if (c.kind === 'pc' && c.hp <= 0 && !c.dead) {
@@ -899,7 +902,7 @@
         if (B.phase === 'setup') {
           if (ui.placing) {
             const o = E.get(ui.placing);
-            if (o && G.canStand(B, o, x, y, { fly: !!o.speed.fly }) && G.canEndAt(B, o, x, y)) {
+            if (o && G.canStand(B, o, x, y, { fly: !!o.speed.fly, placing: true }) && G.canEndAt(B, o, x, y)) {
               o.x = x;
               o.y = y;
               const next = B.combatants.find((q) => q.x < 0);
@@ -1239,6 +1242,8 @@
         // Целевая точка: герои — левая четверть карты, враги — правая
         const tx = c.side === 'enemies' ? m.w * 0.78 : m.w * 0.22;
         const ty = m.h / 2;
+        const aquatic = G.isAquatic(c);
+        const hasWater = m.cells.some((id) => D.tile(id).wet);
         const cand = [];
         for (let y = 0; y < m.h; y++)
           for (let x = 0; x < m.w; x++) {
@@ -1246,7 +1251,9 @@
             if (!fp.every(([fx, fy]) => G.inBounds(m, fx, fy))) continue;
             const tiles = fp.map(([fx, fy]) => G.tile(m, fx, fy));
             if (tiles.some((t) => !t.walk || t.hazard)) continue;
-            const pen = tiles.some((t) => t.difficult) ? 3 : 0;
+            if (aquatic && hasWater && !tiles.every((t) => t.wet)) continue;
+            let pen = tiles.some((t) => t.difficult) ? 3 : 0;
+            if (!aquatic && !c.speed.fly && tiles.some((t) => t.wet)) pen += 40;
             const dx = x + c.cells / 2 - tx;
             const dy = (y + c.cells / 2 - ty) * 0.8;
             cand.push({ x, y, d: Math.sqrt(dx * dx + dy * dy) + pen });
@@ -1478,6 +1485,11 @@
         const roll = el('input', { type: 'checkbox', checked: settings.rollMonsterHp, onchange: (e) => (settings.rollMonsterHp = e.target.checked) });
         const auto = el('input', { type: 'checkbox', checked: !ui.paused, onchange: (e) => (settings.autoAI = e.target.checked) });
         const grid = el('input', { type: 'checkbox', checked: board.showGrid, onchange: (e) => (settings.grid = e.target.checked) });
+        const water = U.select([
+          { value: 'all', label: 'Любая вода лишает действий' },
+          { value: 'deep', label: 'Только глубокая вода' },
+          { value: 'off', label: 'Не ограничивает' },
+        ], settings.waterRule || 'all', (v) => (settings.waterRule = v));
         await UI.modal({
           title: '⚙ Настройки боя',
           body: el('div', { class: 'form-grid', style: { gridTemplateColumns: '220px 1fr' } },
@@ -1486,10 +1498,12 @@
             el('label', {}, 'Показывать хиты врагов'), el('div', {}, hp),
             el('label', {}, 'Бросать хиты монстров'), el('div', {}, roll, el('span', { class: 'muted' }, ' (для новых)')),
             el('label', {}, 'Автоход ИИ'), el('div', {}, auto),
-            el('label', {}, 'Сетка'), el('div', {}, grid)),
+            el('label', {}, 'Сетка'), el('div', {}, grid),
+            el('label', {}, 'Вода'), el('div', {}, water, el('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px' } }, 'Кто не умеет плавать и не летает, в воде может только перемещаться — без действий и бонусных действий. Водные существа (рыбы, акулы) плавают только по воде и задыхаются на суше.'))),
           buttons: [{ label: 'Готово', value: true, cls: 'primary' }],
         }).promise;
         Store.setSettings(settings);
+        B.waterRule = settings.waterRule || 'all';
         dicebox.speed = settings.dice;
         board.showEnemyHp = settings.enemyHp;
         board.showGrid = settings.grid;
@@ -1541,7 +1555,7 @@
       // Старт
       board.showGrid = settings.grid;
       if (params.revalidate) {
-        for (const c of B.combatants) if (c.x >= 0 && (!G.canStand(B, c, c.x, c.y, { fly: !!c.speed.fly }) || c.x + c.cells > B.map.w || c.y + c.cells > B.map.h)) c.x = -1;
+        for (const c of B.combatants) if (c.x >= 0 && (!G.canStand(B, c, c.x, c.y, { fly: !!c.speed.fly, placing: true }) || c.x + c.cells > B.map.w || c.y + c.cells > B.map.h)) c.x = -1;
       }
       if (params.autoplace || params.revalidate) autoPlaceAll();
       refresh();

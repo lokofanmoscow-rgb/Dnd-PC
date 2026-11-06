@@ -4,7 +4,8 @@
   const D = (root.DND = root.DND || {});
 
   /* walk — можно пройти; sight — не блокирует обзор; difficult — труднопроходимая местность;
-     hazard — урон при входе/в начале хода; swim — плавание (труднопроходимо без скорости плавания) */
+     hazard — урон при входе/в начале хода; swim — плавание (труднопроходимо без скорости плавания);
+     wet — вода: по ней плавают водные существа, остальные в ней не могут совершать действия */
   const TILES = {
     floor: { name: 'Каменный пол', cat: 'Пол', walk: true, sight: true, color: '#77716a' },
     flagstone: { name: 'Плиты', cat: 'Пол', walk: true, sight: true, color: '#8a8378' },
@@ -19,8 +20,8 @@
     rubble: { name: 'Обломки', cat: 'Природа', walk: true, sight: true, difficult: true, color: '#6e6760' },
     ice: { name: 'Лёд', cat: 'Природа', walk: true, sight: true, difficult: true, color: '#b9dbe8' },
     web: { name: 'Паутина', cat: 'Природа', walk: true, sight: true, difficult: true, color: '#55534f' },
-    water: { name: 'Мелководье', cat: 'Вода', walk: true, sight: true, difficult: true, color: '#3f7fae' },
-    deep: { name: 'Глубокая вода', cat: 'Вода', walk: true, sight: true, difficult: true, swim: true, color: '#22507e' },
+    water: { name: 'Мелководье', cat: 'Вода', walk: true, sight: true, difficult: true, wet: true, color: '#3f7fae' },
+    deep: { name: 'Глубокая вода', cat: 'Вода', walk: true, sight: true, difficult: true, swim: true, wet: true, color: '#22507e' },
     bridge: { name: 'Мост', cat: 'Вода', walk: true, sight: true, color: '#8b6a41' },
     lava: { name: 'Лава', cat: 'Опасности', walk: true, sight: true, hazard: { dice: '4d10', type: 'fire' }, color: '#d2521b' },
     fire: { name: 'Костёр / огонь', cat: 'Опасности', walk: true, sight: true, hazard: { dice: '1d10', type: 'fire' }, color: '#7b4a2a' },

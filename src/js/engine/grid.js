@@ -67,13 +67,40 @@
   };
   G.hasLOSToCell = (map, a, x, y) => G.hasLOS(map, a, { x, y, cells: 1 });
 
+  /* ---------- Вода ---------- */
+  /* Водное существо: умеет только плавать (рыбы, акулы, касатка, морской конёк) */
+  G.isAquatic = (c) => !!(c && c.speed && c.speed.swim && !c.speed.walk && !c.speed.fly);
+  /* Все клетки под существом — вода */
+  G.allWet = function (map, c, x, y) {
+    const px = x == null ? c.x : x;
+    const py = y == null ? c.y : y;
+    if (px < 0 || py < 0) return false;
+    return G.footprint(px, py, c.cells).every(([fx, fy]) => G.inBounds(map, fx, fy) && !!G.tile(map, fx, fy).wet);
+  };
+  /* Лишает ли вода действий: существо без скорости плавания, не летит, целиком в воде.
+     B.waterRule: 'all' — любая вода, 'deep' — только глубокая, 'off' — без ограничений */
+  G.waterLocks = function (B, c, x, y, fly) {
+    const rule = B.waterRule || 'all';
+    if (rule === 'off' || fly || !c || (c.speed && c.speed.swim)) return false;
+    const px = x == null ? c.x : x;
+    const py = y == null ? c.y : y;
+    if (px < 0 || py < 0) return false;
+    return G.footprint(px, py, c.cells).every(([fx, fy]) => {
+      if (!G.inBounds(B.map, fx, fy)) return false;
+      const t = G.tile(B.map, fx, fy);
+      return !!t.wet && (rule === 'all' || !!t.swim);
+    });
+  };
+
   /* ---------- Перемещение ---------- */
   G.canStand = function (B, c, x, y, opts) {
     const map = B.map;
+    const aquatic = G.isAquatic(c) && !(opts && (opts.placing || opts.fly));
     for (const [fx, fy] of G.footprint(x, y, c.cells)) {
       if (!G.inBounds(map, fx, fy)) return false;
       const t = G.tile(map, fx, fy);
       if (!t.walk && !(opts && opts.fly && t.id === 'pit')) return false;
+      if (aquatic && !t.wet) return false;
     }
     return true;
   };
@@ -99,7 +126,7 @@
       const t = G.tile(B.map, fx, fy);
       if (fly) continue;
       if (t.difficult) {
-        if (t.swim && c.speed && c.speed.swim) continue;
+        if (t.wet && c.speed && c.speed.swim) continue;
         if (t.id === 'web' && c.flags && c.flags.webWalker) continue;
         difficult = true;
       }
@@ -182,6 +209,7 @@
         let step = G.stepCost(B, c, nx, ny, opts);
         if (opts.avoidHazards) {
           for (const [fx, fy] of G.footprint(nx, ny, c.cells)) if (G.tile(B.map, fx, fy).hazard && !opts.fly) step += 20;
+          if (G.waterLocks(B, c, nx, ny, opts.fly)) step += 6;
         }
         const nc = cur.cost + step;
         if (nc > maxCost) continue;

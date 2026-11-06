@@ -226,6 +226,7 @@
     if (c.dead || c.hp <= 0 || c.banished) return 0;
     if (this.hasCond(c, 'grappled') || this.hasCond(c, 'restrained') || this.hasCond(c, 'paralyzed') || this.hasCond(c, 'stunned') || this.hasCond(c, 'petrified')) return 0;
     let s = (c.speed.walk || 0) + this.effSum(c, 'speedBonus');
+    if (c.speed.swim && (G.isAquatic(c) || G.allWet(this.B.map, c))) s = Math.max(s, c.speed.swim + this.effSum(c, 'speedBonus'));
     const magicFly = c.effects.find((e) => e.fly);
     if ((c.speed.fly || magicFly) && !this.hasCond(c, 'prone')) s = Math.max(s, c.speed.fly || 0, magicFly ? magicFly.fly : 0);
     if (this.hasEff(c, 'slowed')) s -= 10;
@@ -654,6 +655,17 @@
       }
     }
 
+    // Водное существо на суше задыхается
+    if (G.isAquatic(c) && c.x >= 0 && c.hp > 0 && !G.allWet(B.map, c)) {
+      const amt = Dice.roll('1d10').total + Math.floor(c.maxHp / 10);
+      this.log('🐟 ' + this.name(c) + ' задыхается без воды!', 'bad');
+      await this.applyDamage(c, [{ amount: amt, type: 'bludgeoning' }], null, { pure: true, note: 'от удушья', fromAttack: false });
+      if (c.dead) {
+        await this.checkEnd();
+        return this.nextTurn();
+      }
+    }
+
     // Опасная местность в начале хода
     await this.hazardAt(c, 'start');
     if (c.dead) {
@@ -691,7 +703,23 @@
     }
     c.acted = true;
     c.dispOff = false;
+    if (c.hp > 0 && G.waterLocks(B, c, c.x, c.y, this.canFly(c))) this.lockInWater(c);
     B.turn.move = B.turn.noMove ? 0 : this.speedOf(c);
+    this.h.changed();
+  };
+
+  /* Существо без скорости плавания в воде: может только плыть */
+  P.lockInWater = function (c) {
+    const t = this.B.turn;
+    if (!t || t.uid !== c.uid || t.flags.swimming) return;
+    t.flags.swimming = true;
+    t.flags.hasteAction = false;
+    t.actions = 0;
+    t.bonus = false;
+    t.attacksLeft = 0;
+    t.pool = null;
+    t.bonusAttack = null;
+    this.log('🌊 ' + this.name(c) + ' барахтается в воде: только перемещение, без действий и бонусных действий.', 'warn');
     this.h.changed();
   };
 
@@ -992,6 +1020,11 @@
     const raging = this.hasEff(tgt, 'rage');
     for (const p of parts) {
       if (!p || p.amount <= 0) continue;
+      if (opts.pure) {
+        total += p.amount;
+        segs.push(p.amount + (opts.note ? ' ' + opts.note : ''));
+        continue;
+      }
       let a = p.amount;
       let note = '';
       const phys = R.PHYSICAL.includes(p.type);
@@ -3163,6 +3196,7 @@
       }
       const tl = G.tile(B.map, step.x, step.y);
       if (tl.hazard && !fly) await this.hazardAt(c, 'enter');
+      if (t && t.uid === c.uid && !t.flags.swimming && G.waterLocks(B, c, c.x, c.y, fly)) this.lockInWater(c);
     }
     this.h.changed();
     await this.checkEnd();
@@ -3384,7 +3418,7 @@
       if (f.combatWildShape && c.spellcasting && this.anySlot(c)) add('moonHeal', 'Лечение в облике (ячейка)', 'bonus', hasBonus, { target: 'self' });
     }
     if (f.secondWind) add('secondWind', 'Второе дыхание (1d10+' + lv + ')', 'bonus', hasBonus && left(res.secondWind), { target: 'self' });
-    if (f.actionSurge) add('actionSurge', 'Всплеск действий', 'free', left(res.actionSurge), { target: 'self' });
+    if (f.actionSurge) add('actionSurge', 'Всплеск действий', 'free', left(res.actionSurge) && !t.flags.swimming, { target: 'self' });
     if (f.rage) {
       if (raging) add('endRage', 'Прекратить ярость', 'free', true, { target: 'self' });
       else add('rage', 'Ярость' + (res.rage && res.rage.max < 99 ? ' (' + (res.rage.max - res.rage.used) + ')' : ''), 'bonus', hasBonus && left(res.rage) && c.armorCat !== 'heavy', { target: 'self' });
@@ -3586,6 +3620,7 @@
         return { ok: true };
       }
       case 'actionSurge':
+        if (t.flags.swimming) return fail('в воде нельзя совершать действия');
         res.actionSurge.used++;
         t.actions++;
         this.log(this.name(c) + ' использует Всплеск действий — дополнительное действие!', 'action');
